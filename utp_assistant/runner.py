@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from groq import Groq
+from groq import BadRequestError, Groq
 from groq._exceptions import RateLimitError
 from groq.types.chat import ChatCompletionMessage  # noqa: F401  (tipado)
 
@@ -29,6 +29,8 @@ from .tools import ORDER, TOOLS
 TEMPERATURE = 0.2
 MAX_TOKENS = 4096
 MAX_ATTEMPTS = 4
+MAX_ROUNDS = 4
+MAX_CORRECTIVOS = 2
 
 REGISTRY: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "actualizar_contacto_en_crm": crm.upsert_contact,
@@ -42,6 +44,39 @@ _ORDER_INDEX = {name: i for i, name in enumerate(ORDER)}
 
 def make_client() -> Groq:
     return Groq(api_key=require_api_key())
+
+
+def _tool_use_failed(exc: BadRequestError) -> bool:
+    mensaje = str(exc)
+    return "tool_use_failed" in mensaje or "did not match schema" in mensaje
+
+
+def _chat_tool_round(client: Groq, messages: list[dict[str, Any]]) -> Any:
+    """Ronda de tool calling con correctivo: si el modelo emite funciones con
+    parametros invalidos (Groq responde 400), se le pide corregir y se reintenta.
+
+    Mismo numero de intentos en total (correctivos de adopcion del modelo).
+    """
+    intentos = MAX_CORRECTIVOS + 1
+    ultimo: Exception | None = None
+    for intento in range(intentos):
+        try:
+            return _chat(client, messages=messages, tools=TOOLS, tool_choice="auto")
+        except BadRequestError as exc:
+            if not _tool_use_failed(exc):
+                raise
+            ultimo = exc
+            if intento < intentos - 1:
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Corrige las llamadas a funciones: todos los parametros deben cumplir el "
+                        "esquema definido. No uses null; si un dato falta usa el texto "
+                        "'PENDIENTE DE CONFIRMACION' y en booleanos el valor explicito. "
+                        "Respeta los enumerados indicados."
+                    ),
+                })
+    raise ultimo  # type: ignore[misc]
 
 
 def _is_rate_limit(exc: Exception) -> bool:
@@ -140,6 +175,11 @@ def run_assistant(thread_id: int, client: Groq | None = None, db_path: Any = Non
     """Ejecuta un Run completo sobre el thread indicado.
 
     Devuelve: {thread_id, run_id, estado, resumen_final, tool_calls}
+
+    El asistente puede pedir funciones en varias rondas (los modelos pueden
+    repartir las acciones del correo en distintos turnos). Se limita a
+    ``MAX_ROUNDS``; si aun asi nunca produce texto, se entrega un resumen
+    determinista con los resultados ya ejecutados.
     """
     if client is None:
         client = make_client()
@@ -147,11 +187,25 @@ def run_assistant(thread_id: int, client: Groq | None = None, db_path: Any = Non
     messages = _build_messages(thread_id, db_path)
     run_id = f"run_{uuid.uuid4().hex[:10]}"
 
-    first = _chat(client, messages=messages, tools=TOOLS, tool_choice="auto")
-    msg = first.choices[0].message
     executed: list[dict[str, Any]] = []
+    ejecutadas: set[str] = set()
+    final_text: str | None = None
+    modelo_invalido = False
 
-    if msg.tool_calls:
+    for _ in range(MAX_ROUNDS):
+        try:
+            first = _chat_tool_round(client, messages)
+        except BadRequestError:
+            # el modelo no logro emitir tool_calls validas ni aun con correctivos:
+            # se cierra el Run con resumen determinista de lo ya ejecutado
+            modelo_invalido = True
+            break
+        msg = first.choices[0].message
+
+        if not msg.tool_calls:
+            final_text = msg.content or "Procesamiento completado (sin resumen de texto del modelo)."
+            break
+
         # requires_action: el arreglo tool_calls llega a la app (no al modelo)
         messages.append({
             "role": "assistant",
@@ -160,6 +214,7 @@ def run_assistant(thread_id: int, client: Groq | None = None, db_path: Any = Non
         })
 
         tool_calls = sorted(msg.tool_calls, key=lambda tc: _ORDER_INDEX.get(tc.function.name, 99))
+        nuevas = 0
         for tc in tool_calls:
             name = tc.function.name
             try:
@@ -167,7 +222,13 @@ def run_assistant(thread_id: int, client: Groq | None = None, db_path: Any = Non
             except json.JSONDecodeError:
                 arguments = {}
 
-            out = dispatch(name, arguments)
+            # dedupe: una funcion por Run (algunas modelos repiten llamadas ya hechas)
+            if name in ejecutadas:
+                out = {"ok": True, "info": f"{name} ya fue ejecutada en este run; sin duplicar."}
+            else:
+                ejecutadas.add(name)
+                nuevas += 1
+                out = dispatch(name, arguments)
             executed.append({"name": name, "arguments": arguments, "output": out})
             # submit_tool_outputs equivalente: un mensaje 'tool' por tool_call_id
             messages.append({
@@ -176,13 +237,18 @@ def run_assistant(thread_id: int, client: Groq | None = None, db_path: Any = Non
                 "content": json.dumps(out, ensure_ascii=False),
             })
 
-        # tras resolver las funciones, forzar resumen en texto (evita content null)
-        final = _chat(client, messages=messages, tools=TOOLS, tool_choice="none")
-        final_text = final.choices[0].message.content
-        if not final_text:
-            final_text = "Procesamiento completado (sin resumen de texto del modelo)."
-    else:
-        final_text = msg.content or "Sin accion requerida."
+        # la ronda no aporto acciones nuevas: no pedir otra ronda al modelo
+        if nuevas == 0:
+            break
+
+    if final_text is None:
+        if modelo_invalido:
+            final_text = (
+                "El modelo no pudo completar el resumen en texto, pero las acciones "
+                "solicitadas fueron ejecutadas.\n"
+            ) + resumen_determinista(executed)
+        else:
+            final_text = resumen_determinista(executed)
 
     # completed: se persiste la respuesta final del asistente en el thread
     db.add_message(thread_id, "assistant", final_text, db_path)
@@ -194,6 +260,18 @@ def run_assistant(thread_id: int, client: Groq | None = None, db_path: Any = Non
         "resumen_final": final_text,
         "tool_calls": executed,
     }
+
+
+def resumen_determinista(executed: list[dict[str, Any]]) -> str:
+    """Resumen de respaldo (sin modelo) a partir de los resultados ejecutados."""
+    if not executed:
+        return "Sin accion requerida."
+    lines = [f"Procesamiento completado. Acciones ejecutadas ({len(executed)}):"]
+    for tc in executed:
+        out = tc["output"]
+        estado = "OK" if out.get("ok") else "ERROR"
+        lines.append(f"- {tc['name']}: {estado} -> {json.dumps(out, ensure_ascii=False)}")
+    return "\n".join(lines)
 
 
 def process_email(email: dict[str, Any], client: Groq | None = None, db_path: Any = None) -> dict[str, Any]:

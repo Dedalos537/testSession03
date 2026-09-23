@@ -14,15 +14,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-MODEL = os.getenv("MODEL", "llama-3.3-70b-versatile")
+MODEL = os.getenv("MODEL", "openai/gpt-oss-120b")
 DB_PATH = Path(os.getenv("DB_PATH", str(Path(__file__).resolve().parent / "utp_assistant.db")))
 
-# Modelos alternativos con soporte de tool calling en Groq
+# Modelos con soporte de tool calling disponibles en esta cuenta de Groq
 MODEL_OPTIONS = [
-    "llama-3.3-70b-versatile",
     "openai/gpt-oss-120b",
-    "qwen/qwen3.6-27b",
-    "llama-3.1-8b-instant",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.8-27b",
 ]
 
 
