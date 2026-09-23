@@ -410,6 +410,36 @@ def list_emails(db_path: Path | str | None = None) -> list[dict[str, Any]]:
         conn.close()
 
 
+def get_email(
+    email_id: int, db_path: Path | str | None = None
+) -> dict[str, Any] | None:
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            "SELECT e.*, t.cliente, t.empresa FROM emails e "
+            "JOIN threads t ON t.id = e.thread_id WHERE e.id = ?",
+            (email_id,),
+        ).fetchone()
+        return dict(row) | {"adjuntos": _loads(row["adjuntos"])} if row else None
+    finally:
+        conn.close()
+
+
+def thread_exists(
+    thread_id: int, db_path: Path | str | None = None
+) -> bool:
+    conn = get_connection(db_path)
+    try:
+        return (
+            conn.execute(
+                "SELECT 1 FROM threads WHERE id = ?", (thread_id,)
+            ).fetchone()
+            is not None
+        )
+    finally:
+        conn.close()
+
+
 def mark_email_processed(
     email_id: int, run_id: str, db_path: Path | str | None = None
 ) -> None:

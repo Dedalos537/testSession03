@@ -215,6 +215,32 @@ def test_registros_traen_origen_y_auditoria(dbfile):
     assert all(a["run_id"] == res["run_id"] for a in acciones)
 
 
+def test_process_email_con_thread_obsoleto_devuelve_error_sin_crash(dbfile):
+    """Regresion: si la UI manda un email de una DB reseteada, no se cae con FK error."""
+    email = _primer_pendiente()
+    res = runner.process_email(email, client=FakeClient())
+    assert res["estado"] == "completed"
+
+    db2 = db.DB_PATH.parent / "otra.db"
+    db.seed(db_path=db2)
+
+    # email con id/thread inexistentes en DB nueva -> debe devolver error, no excepcion
+    from utp_assistant.runner import process_email as pe
+
+    stale = dict(email) | {"id": 9999, "thread_id": 9999}
+    res2 = pe(stale, client=FakeClient(), db_path=db2)
+    assert res2["estado"] == "error"
+    assert "Recarga la pagina" in res2["error"]
+
+
+def test_run_assistant_con_thread_inexistente_no_entra_al_modelo(dbfile):
+    db2 = db.DB_PATH.parent / "otra.db"
+    db.seed(db_path=db2)
+    res = runner.run_assistant(9999, client=FakeClient(), db_path=db2)
+    assert res["estado"] == "error"
+    assert "Recarga la pagina" in res["error"]
+
+
 def test_resumen_determinista_legible_sin_json(dbfile):
     """El resumen de respaldo no vuelca JSON crudo ni duplica series de dicts."""
     resumen = runner.resumen_determinista([

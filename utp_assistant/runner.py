@@ -236,6 +236,12 @@ def run_assistant(
     if client is None:
         client = make_client()
 
+    if not db.thread_exists(thread_id, db_path):
+        return {
+            "estado": "error",
+            "error": "El hilo ya no existe en la base de datos. Recarga la pagina.",
+        }
+
     messages = _build_messages(thread_id, db_path)
     run_id = f"run_{uuid.uuid4().hex[:10]}"
 
@@ -360,8 +366,24 @@ def process_email(
     *,
     usuario: str | None = None,
 ) -> dict[str, Any]:
-    """Procesa un correo pendiente: lo añade al thread, ejecuta el Run y lo marca procesado."""
+    """Procesa un correo pendiente: lo añade al thread, ejecuta el Run y lo marca procesado.
+
+    Se re-resuelve el correo desde la DB (no se confía en el dict que llegue de
+    la UI): si la sesión quedó desincronizada (p. ej. tras un reseteo de la DB),
+    el correo puede haber desaparecido o apuntar a un thread inexistente; en ese
+    caso se devuelve un error claro (Riesgo 1) en lugar de una excepción de FK.
+    """
+    email = db.get_email(int(email["id"]), db_path) or dict(email)
     thread_id = int(email["thread_id"])
+    if not db.thread_exists(thread_id, db_path):
+        return {
+            "estado": "error",
+            "error": (
+                f"El correo #{email['id']} no puede procesarse: el thread ya no "
+                "existe en la base de datos. Recarga la pagina (Refrescar) y vuelve "
+                "a intentarlo."
+            ),
+        }
     origen = f"EMAIL {email['id']} · {email['fecha']} · {email['asunto']}"
     add_email_to_thread(email, db_path)
     result = run_assistant(
@@ -373,4 +395,4 @@ def process_email(
         usuario=usuario,
     )
     db.mark_email_processed(email["id"], result["run_id"], db_path)
-    return result
+    return result | {"email": email["id"], "asunto": email["asunto"]}

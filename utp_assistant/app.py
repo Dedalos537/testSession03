@@ -105,6 +105,9 @@ def pestana_bandeja() -> None:
                             client=client,
                             usuario=st.session_state["user"]["email"],
                         )
+                        if res.get("estado") == "error":
+                            st.error(res.get("error", "Error al procesar el correo."))
+                            continue
                         st.markdown(
                             theme.run_card(email["asunto"], res),
                             unsafe_allow_html=True,
@@ -210,8 +213,11 @@ def pestana_chat() -> None:
                     client=_get_client(),
                     usuario=st.session_state["user"]["email"],
                 )
-            with st.chat_message("assistant"):
-                st.markdown(res["resumen_final"])
+            if res.get("estado") == "error":
+                st.error(res.get("error", "Error al ejecutar el Run."))
+            else:
+                with st.chat_message("assistant"):
+                    st.markdown(res["resumen_final"])
         except Exception as exc:  # noqa: BLE001
             st.error(f"Error en el Run: {exc}")
 
