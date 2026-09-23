@@ -1,6 +1,6 @@
 """UI Streamlit de "UTP Assistant": red interna simulada de 2 usuarios.
 
-Pestanas:
+Pestañas:
 - Bandeja: correos simulados, procesar pendientes y simular correo entrante.
 - Chat del thread: conversacion con el asistente por cliente/thread.
 - Resultados: sistemas simulados (Jira, CRM, Calendar, Slack).
@@ -13,7 +13,7 @@ from typing import Any
 
 import streamlit as st
 
-from utp_assistant import db, runner
+from utp_assistant import db, runner, theme
 from utp_assistant.config import MODEL
 
 st.set_page_config(page_title="UTP Assistant", page_icon="✉️", layout="wide")
@@ -23,7 +23,6 @@ def _init() -> None:
     db.init_db()
     db.seed()
     st.session_state.setdefault("user", None)
-    st.session_state.setdefault("thread_seleccionado", None)
 
 
 def _usuarios() -> list[dict[str, Any]]:
@@ -39,41 +38,20 @@ def _usuarios() -> list[dict[str, Any]]:
 def _login() -> None:
     if st.session_state["user"]:
         return
-    with st.container(border=True):
-        st.subheader("Ingreso a la red interna (2 usuarios)")
-        col1, col2 = st.columns(2)
-        with col1:
-            nombre = st.selectbox(
-                "Usuario",
-                [u["nombre"] for u in _usuarios()],
-                index=0,
-            )
-        with col2:
-            clave = st.text_input("Contrasena", type="password")
-        if st.button("Ingresar", type="primary"):
-            user = next(u for u in _usuarios() if u["nombre"] == nombre)
-            if db.verify_password(clave, user["pass_hash"]):
-                st.session_state["user"] = user
-                st.rerun()
-            else:
-                st.error("Contrasena incorrecta. (Prototipo: use 'demo123')")
+    theme.assets()
+    st.markdown(theme.login_apertura(), unsafe_allow_html=True)
+    opciones = {u["nombre"]: u for u in _usuarios()}
+    nombre = st.selectbox("Usuario", list(opciones))
+    clave = st.text_input("Contraseña", type="password")
+    if st.button("Ingresar", type="primary", use_container_width=True):
+        user = opciones.get(nombre)
+        if user and db.verify_password(clave, user["pass_hash"]):
+            st.session_state["user"] = user
+            st.rerun()
+        else:
+            st.error("Contraseña incorrecta (prototipo: use 'demo123').")
+    st.markdown(theme.login_cierre(), unsafe_allow_html=True)
     st.stop()
-
-
-@st.cache_data(show_spinner=False)
-def _listado_emails() -> list[dict[str, Any]]:
-    from utp_assistant.inbox import list_emails
-
-    return list_emails()
-
-
-def _resultados() -> dict[str, list[dict[str, Any]]]:
-    return {
-        "jira": db.list_jira_tasks(),
-        "crm": db.list_crm_contacts(),
-        "calendar": db.list_calendar_events(),
-        "slack": db.list_slack_messages(),
-    }
 
 
 def _listado_emails() -> list[dict[str, Any]]:
@@ -91,13 +69,32 @@ def _get_client() -> Any:
         st.stop()
 
 
+def _logout() -> None:
+    if st.button("Cerrar sesión", type="secondary", use_container_width=True):
+        st.session_state["user"] = None
+        st.rerun()
+
+
 def pestana_bandeja() -> None:
-    st.subheader("Bandeja de entrada simulada")
+    emails = _listado_emails()
+    pendientes = [e for e in emails if not e["procesado"]]
+    procesados = len(emails) - len(pendientes)
+    st.markdown(
+        theme.metrics_row(
+            [
+                ("Correos pendientes", len(pendientes), "ti-inbox"),
+                ("Correos procesados", procesados, "ti-checks"),
+                ("Tareas Jira", len(db.list_jira_tasks()), "ti-bug"),
+                ("Contactos CRM", len(db.list_crm_contacts()), "ti-address-book"),
+            ]
+        ),
+        unsafe_allow_html=True,
+    )
+
     c1, c2 = st.columns([2, 1])
     with c1:
         if st.button("Procesar correos pendientes", type="primary"):
             client = _get_client()
-            pendientes = [e for e in _listado_emails() if not e["procesado"]]
             if not pendientes:
                 st.info("No hay correos pendientes.")
             with st.status("Ejecutando Run(s)...", expanded=True) as status:
@@ -106,54 +103,79 @@ def pestana_bandeja() -> None:
                         res = runner.process_email(email, client=client)
                         st.write(f"**{email['asunto']}** (run {res['run_id']})")
                         st.code(res["resumen_final"] or "(sin resumen)", language="text")
-                        if res["tool_calls"]:
-                            for tc in res["tool_calls"]:
-                                st.caption(f"- {tc['name']} -> {tc['output']}")
-                    except Exception:  # noqa: BLE001 - UI maneja cualquier fallo del run
-                        st.error(f"Fallo procesando {email['asunto']}:\n{traceback.format_exc()}")
+                        for tc in res["tool_calls"]:
+                            st.caption(f"- {tc['name']} -> {tc['output']}")
+                    except Exception:  # noqa: BLE001 - la UI debe absorber cualquier fallo del run
+                        st.error(
+                            f"Fallo procesando {email['asunto']}:\n{traceback.format_exc()}"
+                        )
                 status.update(label="Runs completados.", state="complete")
     with c2:
-        st.markdown(f"**Modelo Groq:** `{MODEL}`")
+        st.markdown(
+            f'<p class="text-muted mb-0" style="text-align:right">'
+            f'<i class="ti ti-cpu me-1"></i>Modelo: <code>{MODEL}</code></p>',
+            unsafe_allow_html=True,
+        )
 
-    for e in _listado_emails():
-        estado = "✅ procesado" if e["procesado"] else "⏳ pendiente"
-        with st.expander(f"{e['fecha']} — {e['empresa']} | {e['asunto']} ({estado})"):
-            st.markdown(f"**De:** {e['remitente']}")
-            st.markdown(f"**Adjuntos:** {', '.join(e['adjuntos']) or 'ninguno'}")
-            st.markdown(e["cuerpo"])
-            if e["run_id"]:
-                st.caption(f"run_id: {e['run_id']}")
+    st.markdown('<h3 class="h4 mb-3">Correos recibidos</h3>', unsafe_allow_html=True)
+    if emails:
+        for e in emails:
+            st.markdown(theme.email_card(e), unsafe_allow_html=True)
+    else:
+        st.markdown(
+            theme.empty_state(
+                "ti-inbox",
+                "Bandeja vacía",
+                "Los correos simulados aparecerán aquí, incluida su cabecera, aunque no haya datos.",
+            ),
+            unsafe_allow_html=True,
+        )
 
     st.divider()
-    st.subheader("Simular correo entrante (webhook)")
+    st.markdown(
+        '<h3 class="h4 mb-3">Simular correo entrante (webhook)</h3>',
+        unsafe_allow_html=True,
+    )
     with st.form("nuevo_correo", clear_on_submit=True):
         rem = st.text_input("Remitente", value="Nombre <correo@empresa.com>")
         emp = st.text_input("Empresa", value="Cliente")
         asu = st.text_input("Asunto")
         cuer = st.text_area("Cuerpo")
         adj = st.text_input("Adjuntos (separador ,)", value="")
-        if st.form_submit_button("Enviar correo"):
+        if st.form_submit_button("Enviar correo", type="primary"):
             from utp_assistant.inbox import send_email
 
             adjs = [a.strip() for a in adj.split(",") if a.strip()]
             send_email(rem, asu, cuer, empresa=emp, adjuntos=adjs)
-            _listado_emails.clear()
             st.success("Correo simulado ingresado y pendiente de procesamiento.")
 
 
 def pestana_chat() -> None:
-    st.subheader("Chat del asistente por thread (cliente)")
+    st.markdown(
+        '<h3 class="h5 mb-3"><i class="ti ti-message-circle me-2 text-primary"></i>'
+        "Chat del asistente por thread (cliente)</h3>",
+        unsafe_allow_html=True,
+    )
     from utp_assistant.inbox import list_emails
 
     emails = list_emails()
     if not emails:
-        st.info("Sin correos aun.")
+        st.markdown(
+            theme.empty_state(
+                "ti-mail-off",
+                "Sin correos aún",
+                "Crea o procesa un correo para habilitar el chat de su thread.",
+            ),
+            unsafe_allow_html=True,
+        )
         return
 
-    opciones = {f"#{e['thread_id']} — {e['empresa']} ({e['cliente']})": e["thread_id"] for e in emails}
+    opciones = {
+        f"#{e['thread_id']} · {e['empresa']} ({e['cliente']})": e["thread_id"]
+        for e in emails
+    }
     seleccion = st.selectbox("Thread", list(opciones), index=0)
     thread_id = opciones[seleccion]
-    st.session_state["thread_seleccionado"] = thread_id
 
     historial = db.get_thread_messages(thread_id)
     for m in historial:
@@ -161,7 +183,9 @@ def pestana_chat() -> None:
         with st.chat_message(papel):
             st.markdown(m["content"])
 
-    texto = st.chat_input("Escribe un mensaje al asistente (se añadira al thread y se ejecutara un Run)")
+    texto = st.chat_input(
+        "Escribe un mensaje al asistente (se añadirá al thread y se ejecutará un Run)"
+    )
     if texto:
         with st.chat_message("user"):
             st.markdown(texto)
@@ -176,31 +200,126 @@ def pestana_chat() -> None:
 
 
 def pestana_resultados() -> None:
-    st.subheader("Sistemas externos simulados")
-    datos = _resultados()
-    tab_jira, tab_crm, tab_cal, tab_slack = st.tabs(["Jira", "CRM", "Calendar", "Slack"])
+    jira = db.list_jira_tasks()
+    crm = db.list_crm_contacts()
+    cal = db.list_calendar_events()
+    slack = db.list_slack_messages()
+    st.markdown(
+        theme.metrics_row(
+            [
+                ("Tareas Jira", len(jira), "ti-bug"),
+                ("Contactos CRM", len(crm), "ti-address-book"),
+                ("Eventos Calendar", len(cal), "ti-calendar"),
+                ("Mensajes Slack", len(slack), "ti-message-circle"),
+            ]
+        ),
+        unsafe_allow_html=True,
+    )
+
+    tab_jira, tab_crm, tab_cal, tab_slack = st.tabs(
+        ["Jira", "CRM", "Calendar", "Slack"]
+    )
     with tab_jira:
-        st.dataframe(datos["jira"], use_container_width=True)
+        st.markdown(
+            theme.tabla_tabler(
+                "Tareas de proyecto",
+                "ti-bug",
+                ["Clave", "Título", "Prioridad", "Cliente", "Fecha límite"],
+                [
+                    (
+                        j["key"],
+                        j["titulo"],
+                        j["prioridad"],
+                        j["cliente_relacionado"],
+                        j.get("fecha_limite") or "—",
+                    )
+                    for j in jira
+                ],
+                "Aún no hay tareas de Jira.",
+            ),
+            unsafe_allow_html=True,
+        )
     with tab_crm:
-        st.dataframe(datos["crm"], use_container_width=True)
+        st.markdown(
+            theme.tabla_tabler(
+                "Contactos del CRM",
+                "ti-address-book",
+                ["Contacto", "Empresa", "Email", "Etapa del pipeline", "Interés", "Última interacción"],
+                [
+                    (
+                        c["nombre_contacto"],
+                        c["empresa"],
+                        c["correo_electronico"],
+                        c["etapa_pipeline"],
+                        c.get("interes_principal") or "—",
+                        c["ultima_interaccion_resumen"],
+                    )
+                    for c in crm
+                ],
+                "Aún no hay contactos en el CRM.",
+            ),
+            unsafe_allow_html=True,
+        )
     with tab_cal:
-        st.dataframe(datos["calendar"], use_container_width=True)
+        st.markdown(
+            theme.tabla_tabler(
+                "Eventos de Calendar",
+                "ti-calendar",
+                ["Título", "Fecha propuesta", "Hora", "Duración", "Estado", "Asistentes"],
+                [
+                    (
+                        ev["titulo"],
+                        ev.get("fecha_propuesta") or "—",
+                        ev.get("hora_propuesta") or "—",
+                        f"{ev['duracion_minutos']} min" if ev.get("duracion_minutos") else "—",
+                        "Tentativa" if ev.get("es_tentativa") else "Confirmado",
+                        ", ".join(ev.get("asistentes") or []) or "—",
+                    )
+                    for ev in cal
+                ],
+                "Aún no hay eventos en Calendar.",
+            ),
+            unsafe_allow_html=True,
+        )
     with tab_slack:
-        st.dataframe(datos["slack"], use_container_width=True)
-    st.caption("Los datos se leen de SQLite en cada render.")
+        st.markdown(
+            theme.tabla_tabler(
+                "Mensajes de Slack",
+                "ti-message-circle",
+                ["Canal", "Resumen ejecutivo", "Urgencia", "Acciones", "Alertas"],
+                [
+                    (
+                        m["canal"],
+                        m["resumen_ejecutivo"],
+                        m["nivel_urgencia"],
+                        ", ".join(m.get("acciones_realizadas") or []) or "—",
+                        ", ".join(m.get("alertas") or []) or "—",
+                    )
+                    for m in slack
+                ],
+                "Aún no hay mensajes de Slack.",
+            ),
+            unsafe_allow_html=True,
+        )
+    st.markdown(
+        '<p class="text-muted small"><i class="ti ti-database me-1"></i>'
+        "Los datos se leen de SQLite en cada render; las tablas muestran su cabecera "
+        "aunque estén vacías.</p>",
+        unsafe_allow_html=True,
+    )
 
 
 def main() -> None:
     _init()
+    theme.assets()
     _login()
     user = st.session_state["user"]
-    st.sidebar.markdown(f"### Usuario\n{user['nombre']}\n{user['email']}")
-    if st.sidebar.button("Cerrar sesion"):
-        st.session_state["user"] = None
-        st.rerun()
 
-    st.title("UTP Assistant")
-    st.caption("Asistente IA para correos de clientes — red interna simulada de 2 usuarios")
+    c_nav, c_out = st.columns([5, 1])
+    with c_nav:
+        st.markdown(theme.topbar(user, MODEL), unsafe_allow_html=True)
+    with c_out:
+        _logout()
 
     tab1, tab2, tab3 = st.tabs(["📥 Bandeja", "💬 Chat del thread", "📊 Resultados"])
     with tab1:

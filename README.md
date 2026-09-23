@@ -6,8 +6,8 @@ en una red interna de 2 usuarios, basado en la propuesta de diseño técnico del
 ## Stack
 
 - Python 3.11+
-- [Groq API](https://console.groq.com) (Chat Completions + Local Tool Calling) — modelo `llama-3.3-70b-versatile`
-- Streamlit (UI)
+- [Groq API](https://console.groq.com) (Chat Completions + Local Tool Calling) — modelo predeterminado `openai/gpt-oss-120b` (configurable en `.env` con `MODEL`)
+- Streamlit (UI) con diseño [Tabler](https://tabler.io) v1.3.0 (assets oficiales vendored en `utp_assistant/static/tabler`)
 - SQLite (persistencia: threads, mensajes, y sistemas externos simulados Jira/Calendar/CRM/Slack)
 
 > **Nota de arquitectura:** el diseño original plantea la Assistants API de OpenAI.
@@ -53,9 +53,15 @@ utp-assistant/
 │   ├── tools.py                      # schemas de las 4 funciones (sección 3)
 │   ├── runner.py                     # ciclo del Run (Chat Completions + tool calling)
 │   ├── inbox.py                      # bandeja simulada + conector de ingesta
+│   ├── theme.py                      # componentes UI estilo Tabler (topbar, métricas, tablas, empty states)
+│   ├── static/tabler/                # CSS + iconos Tabler vendored (servido en /app/static)
 │   ├── app.py                        # UI Streamlit (2 usuarios, bandeja, chat, resultados)
 │   └── services/                     # SIM Jira/Calendar/CRM/Slack
-└── tests/                            # test_tools, test_runner, test_system_prompt
+└── tests/                            # test_tools, test_runner, test_system_prompt, test_app_ui
 ```
 
 Estado: Tasks 1–8 del PRP implementadas. Login: seleccionar usuario y contraseña `demo123`.
+
+> La tabla "Sistemas externos simulados" y las bandejas renderizan siempre sus cabeceras
+> y un estado vacío explícito aunque todavía no haya datos (verificado por AppTest en
+> `tests/test_app_ui.py`).
