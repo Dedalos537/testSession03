@@ -62,7 +62,7 @@ def _login() -> None:
 
 @st.cache_data(show_spinner=False)
 def _listado_emails() -> list[dict[str, Any]]:
-    from .inbox import list_emails
+    from utp_assistant.inbox import list_emails
 
     return list_emails()
 
@@ -77,7 +77,7 @@ def _resultados() -> dict[str, list[dict[str, Any]]]:
 
 
 def _listado_emails() -> list[dict[str, Any]]:
-    from .inbox import list_emails
+    from utp_assistant.inbox import list_emails
 
     return list_emails()
 
@@ -133,7 +133,7 @@ def pestana_bandeja() -> None:
         cuer = st.text_area("Cuerpo")
         adj = st.text_input("Adjuntos (separador ,)", value="")
         if st.form_submit_button("Enviar correo"):
-            from .inbox import send_email
+            from utp_assistant.inbox import send_email
 
             adjs = [a.strip() for a in adj.split(",") if a.strip()]
             send_email(rem, asu, cuer, empresa=emp, adjuntos=adjs)
@@ -143,7 +143,7 @@ def pestana_bandeja() -> None:
 
 def pestana_chat() -> None:
     st.subheader("Chat del asistente por thread (cliente)")
-    from .inbox import list_emails
+    from utp_assistant.inbox import list_emails
 
     emails = list_emails()
     if not emails:
