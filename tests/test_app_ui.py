@@ -29,6 +29,27 @@ def _login(at: AppTest) -> None:
     at.run()
 
 
+def test_formulario_correo_se_guarda_y_aparece_al_instante(at: AppTest) -> None:
+    """Regresion: enviar correo por el webhook persiste en DB y se muestra en la bandeja ya."""
+    _login(at)
+    assert not at.exception
+    n0 = len(db.list_emails())
+    at.text_input[0].input("Pepito Gomez <pepito@demo.com>")
+    at.text_input[1].input("Demo SAC")
+    at.text_input[2].input("QA urgente: revisar el contrato")
+    at.text_area[0].input("Cuerpo de prueba para el contrato.")
+    next(b for b in at.button if b.label == "Enviar correo").click()
+    at.run()
+    assert not at.exception
+    emails = db.list_emails()
+    assert len(emails) == n0 + 1
+    assert emails[0]["asunto"] == "QA urgente: revisar el contrato"
+    assert emails[0]["procesado"] == 0
+    html = _html(at)
+    assert "QA urgente: revisar el contrato" in html
+    assert any("ingresado y pendiente" in s.value for s in at.success)
+
+
 def test_login_muestra_diseno_tabler(at: AppTest) -> None:
     html = _html(at)
     assert "app/static/tabler/tabler.min.css" in html
@@ -62,8 +83,8 @@ def test_resultados_renderizan_cabeceras_aunque_vacias(at: AppTest) -> None:
     _login(at)
     assert not at.exception
     etiquetas = {t.label for t in at.tabs}
-    assert {"📥 Bandeja", "💬 Chat del thread", "📊 Resultados"} <= etiquetas
-    resultados = next(t for t in at.tabs if t.label == "📊 Resultados")
+    assert {"Bandeja", "Chat del thread", "Resultados"} <= etiquetas
+    resultados = next(t for t in at.tabs if t.label == "Resultados")
     html = "\n".join(m.value for m in resultados.markdown)
     assert "<thead>" in html
     assert "<tbody>" in html

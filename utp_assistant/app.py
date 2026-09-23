@@ -16,7 +16,7 @@ import streamlit as st
 from utp_assistant import db, runner, theme
 from utp_assistant.config import MODEL
 
-st.set_page_config(page_title="UTP Assistant", page_icon="✉️", layout="wide")
+st.set_page_config(page_title="UTP Assistant", layout="wide")
 
 
 def _init() -> None:
@@ -78,6 +78,7 @@ def pestana_bandeja() -> None:
     emails = _listado_emails()
     pendientes = [e for e in emails if not e["procesado"]]
     procesados = len(emails) - len(pendientes)
+    _aviso_correo_enviado()
     st.markdown(
         theme.metrics_row(
             [
@@ -152,7 +153,14 @@ def pestana_bandeja() -> None:
 
             adjs = [a.strip() for a in adj.split(",") if a.strip()]
             send_email(rem, asu, cuer, empresa=emp, adjuntos=adjs)
-            st.success("Correo simulado ingresado y pendiente de procesamiento.")
+            st.session_state["ultimo_correo"] = asu or "(sin asunto)"
+            st.rerun()
+
+
+def _aviso_correo_enviado() -> None:
+    ultimo = st.session_state.pop("ultimo_correo", None)
+    if ultimo:
+        st.success(f"Correo simulado ingresado y pendiente de procesamiento: {ultimo}.")
 
 
 def pestana_chat() -> None:
@@ -313,7 +321,7 @@ def pestana_resultados() -> None:
     )
 
     tab_jira, tab_crm, tab_cal, tab_slack, tab_rev = st.tabs(
-        ["Jira", "CRM", "Calendar", "Slack", "🧪 Revisión humana"]
+        ["Jira", "CRM", "Calendar", "Slack", "Revisión humana"]
     )
     with tab_jira:
         st.markdown(
@@ -422,7 +430,7 @@ def main() -> None:
     with c_out:
         _logout()
 
-    tab1, tab2, tab3 = st.tabs(["📥 Bandeja", "💬 Chat del thread", "📊 Resultados"])
+    tab1, tab2, tab3 = st.tabs(["Bandeja", "Chat del thread", "Resultados"])
     with tab1:
         pestana_bandeja()
     with tab2:
