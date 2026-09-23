@@ -38,7 +38,6 @@ def _usuarios() -> list[dict[str, Any]]:
 def _login() -> None:
     if st.session_state["user"]:
         return
-    theme.assets()
     st.markdown(theme.login_apertura(), unsafe_allow_html=True)
     opciones = {u["nombre"]: u for u in _usuarios()}
     nombre = st.selectbox("Usuario", list(opciones))
