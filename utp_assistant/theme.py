@@ -2,22 +2,43 @@ from __future__ import annotations
 
 import html
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 import streamlit as st
 
+_STATIC_PATH = Path(__file__).resolve().parent / "static" / "tabler"
 _STATIC_PREFIX = "/app/static/tabler"
+
+_CSS_FILES = ("utp-app.css", "tabler.min.css", "tabler-icons.min.css")
+_CSS_CACHE: dict[str, str] = {}
 
 
 def _esc(value: Any) -> str:
     return html.escape(str(value), quote=True)
 
 
+def _css_inline() -> str:
+    """Devuelve un <style> unico con el CSS de la app.
+
+    Se inyecta inline (no via <link>) porque el static serving de Streamlit
+    no esta disponible en todos los despliegues; asi el tema claro, la
+    tipografia 24-56px y el login estilo GitHub se aplican siempre.
+    """
+    bloques = [_CSS_CACHE.get(nombre, "") for nombre in _CSS_FILES]
+    if not all(bloques):
+        for nombre in _CSS_FILES:
+            _CSS_CACHE[nombre] = (_STATIC_PATH / nombre).read_text(encoding="utf-8")
+        bloques = [_CSS_CACHE[nombre] for nombre in _CSS_FILES]
+    return "<style>" + "".join(bloques) + "</style>"
+
+
 def assets() -> None:
     st.markdown(
         f'<link rel="stylesheet" href="{_STATIC_PREFIX}/tabler.min.css" />\n'
         f'<link rel="stylesheet" href="{_STATIC_PREFIX}/tabler-icons.min.css" />\n'
-        f'<link rel="stylesheet" href="{_STATIC_PREFIX}/utp-app.css" />',
+        f'<link rel="stylesheet" href="{_STATIC_PREFIX}/utp-app.css" />\n'
+        + _css_inline(),
         unsafe_allow_html=True,
     )
 
@@ -171,15 +192,19 @@ def run_card(asunto: str, res: dict[str, Any]) -> str:
 
 def login_apertura() -> str:
     return (
-        '<div class="auth-card card">'
-        '<div class="card-body p-4">'
-        '<div class="auth-head">'
-        '<span class="avatar avatar-brand mb-3"><i class="ti ti-mail"></i></span>'
-        '<h2 class="h3 mb-1">UTP Assistant</h2>'
-        '<p class="text-muted mb-0">Ingreso a la red interna (2 usuarios)</p>'
-        "</div>"
+        '<div class="auth-wrap">'
+        '<div class="auth-mark"><i class="ti ti-mail"></i></div>'
+        '<h1 class="auth-title">Ingresa a tu cuenta</h1>'
+        '<p class="auth-sub">UTP Assistant · acceso a la red interna</p>'
+        '<div class="card auth-card">'
+        '<div class="auth-body">'
     )
 
 
 def login_cierre() -> str:
-    return "</div></div>"
+    return (
+        "</div></div>"
+        '<p class="auth-foot text-muted">Nuevo en la red interna? Habla con tu equipo. '
+        "(prototipo: contrase\u00f1a demo123)</p>"
+        "</div>"
+    )

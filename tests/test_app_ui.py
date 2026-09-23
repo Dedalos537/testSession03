@@ -55,7 +55,8 @@ def test_login_muestra_diseno_tabler(at: AppTest) -> None:
     assert "app/static/tabler/tabler.min.css" in html
     assert "tabler-icons.min.css" in html
     assert "auth-card" in html
-    assert "Ingreso a la red interna" in html
+    assert "Ingresa a tu cuenta" in html
+    assert "acceso a la red interna" in html
 
 
 def test_login_invalido_muestra_error(at: AppTest) -> None:
