@@ -11,7 +11,12 @@ _REQUIRED = ["canal", "resumen_ejecutivo", "acciones_realizadas", "nivel_urgenci
 _NIVELES = ["Normal", "Alta", "Critica"]
 
 
-def send_notification(args: dict[str, Any]) -> dict[str, Any]:
+def send_notification(
+    args: dict[str, Any],
+    *,
+    run_id: str | None = None,
+    origen: str | None = None,
+) -> dict[str, Any]:
     """Envia una notificacion de resumen al canal interno (simulado)."""
     error = validate_params(args, _REQUIRED)
     if error:
@@ -26,6 +31,8 @@ def send_notification(args: dict[str, Any]) -> dict[str, Any]:
         acciones_realizadas=args.get("acciones_realizadas", []),
         nivel_urgencia=args["nivel_urgencia"],
         alertas=args.get("alertas", []),
+        run_id=run_id,
+        origen=origen,
     )
     return {
         "ok": True,

@@ -45,6 +45,19 @@ def test_jira_prioridad_invalida(dbfile):
     assert "prioridad" in out["error"]
 
 
+def test_jira_prioridad_no_inventada_pendiente_confirmacion(dbfile):
+    """Riesgo 1: 'PENDIENTE DE CONFIRMACION' no es valor valido de enum: se rechaza y NO se persiste."""
+    out = jira.create_task({
+        "proyecto_key": "PAGOS",
+        "titulo": "t",
+        "descripcion": "d",
+        "prioridad": "PENDIENTE DE CONFIRMACION",
+        "cliente_relacionado": "X",
+    })
+    assert out["ok"] is False
+    assert len(db.list_jira_tasks()) == 0
+
+
 def test_crm_upsert_idempotente(dbfile):
     base = {
         "nombre_contacto": "Ana Torres",
@@ -130,3 +143,21 @@ def test_tools_schemas_completos():
         assert fn["name"]
         assert fn["description"]
         assert fn["parameters"]["type"] == "object"
+
+
+def test_confirmar_evento_punto_de_control_humano(dbfile):
+    """Riesgo 1: una propuesta tentativa solo pasa a confirmada tras validacion humana."""
+    ev = db.create_calendar_event(
+        titulo="Reunion - TechCorp",
+        asistentes=["ana.torres@techcorp.com"],
+        agenda="detalles",
+        es_tentativa=True,
+        run_id="run_x",
+        origen="EMAIL 1",
+    )
+    assert db.list_calendar_events()[0]["es_tentativa"] == 1
+    assert db.confirmar_evento(ev["id"], usuario="bernie.rivera@utpconsult.com") is True
+    assert db.list_calendar_events()[0]["es_tentativa"] == 0
+    auditoria = [a for a in db.list_auditoria() if a["accion"] == "confirmar_evento"]
+    assert len(auditoria) == 1
+    assert auditoria[0]["detalle"]["event_id"] == ev["id"]

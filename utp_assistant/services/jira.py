@@ -11,7 +11,12 @@ _REQUIRED = ["proyecto_key", "titulo", "descripcion", "cliente_relacionado"]
 _PRIORIDADES = ["Baja", "Media", "Alta", "Urgente"]
 
 
-def create_task(args: dict[str, Any]) -> dict[str, Any]:
+def create_task(
+    args: dict[str, Any],
+    *,
+    run_id: str | None = None,
+    origen: str | None = None,
+) -> dict[str, Any]:
     """Crea una tarea en Jira (simulado). Devuelve {ok, key, ...} o {ok: False, error}."""
     error = validate_params(args, _REQUIRED)
     if error:
@@ -30,6 +35,8 @@ def create_task(args: dict[str, Any]) -> dict[str, Any]:
         prioridad=args.get("prioridad", "Media"),
         cliente_relacionado=args["cliente_relacionado"],
         fecha_limite=args.get("fecha_limite"),
+        run_id=run_id,
+        origen=origen,
     )
     return {
         "ok": True,

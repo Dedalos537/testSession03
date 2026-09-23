@@ -29,6 +29,7 @@ def badge(texto: str, clase: str) -> str:
 def topbar(user: dict[str, Any], modelo: str) -> str:
     nombre = _esc(user["nombre"])
     email = _esc(user["email"])
+    rol = _esc(user.get("rol") or "Equipo")
     return (
         '<div class="topbar">'
         '<div class="topbar-brand">'
@@ -40,6 +41,7 @@ def topbar(user: dict[str, Any], modelo: str) -> str:
         "</div>"
         '<div class="topbar-meta">'
         + badge(f"Modelo: {modelo}", "badge-modelo")
+        + badge(rol, "badge-modelo")
         + '<span class="avatar avatar-user"><i class="ti ti-user"></i></span>'
         + f"{nombre}"
         + f'<span class="d-none d-sm-inline text-muted small">{email}</span>'
@@ -129,6 +131,40 @@ def empty_state(icono: str, titulo: str, detalle: str) -> str:
         f'<i class="ti {icono} d-block mb-2"></i>'
         f'<p class="fw-semibold mb-1">{_esc(titulo)}</p>'
         f'<p class="text-muted mb-0">{_esc(detalle)}</p>'
+        "</div>"
+    )
+
+
+def run_card(asunto: str, res: dict[str, Any]) -> str:
+    """Tarjeta legible de un Run: lista las acciones ejecutadas con su resultado,
+    sin volver a volcar JSON crudo (el resumen completo queda en un expander)."""
+    run_id = _esc(res.get("run_id") or "")
+    items: list[str] = []
+    for tc in res.get("tool_calls") or []:
+        out = tc.get("output") or {}
+        nombre = _esc(tc.get("name") or "")
+        ok = bool(out.get("ok"))
+        detalle = out.get("message") or out.get("error") or out.get("info") or "OK"
+        icono = "ti-check text-success" if ok else "ti-alert-triangle text-danger"
+        sello = badge("OK", "badge-procesado") if ok else badge("NO ejecutada", "badge-pendiente")
+        items.append(
+            '<div class="list-group-item d-flex align-items-start gap-2">'
+            f'<i class="ti {icono} mt-1"></i>'
+            "<div>"
+            f'<div class="fw-semibold">{nombre} {sello}</div>'
+            f'<div class="text-muted small">{_esc(detalle)}</div>'
+            "</div></div>"
+        )
+    cuerpo = "".join(items) if items else (
+        '<div class="text-muted small">Sin acciones ejecutadas (sin accion requerida).</div>'
+    )
+    return (
+        '<div class="card mt-2">'
+        f'<div class="card-header d-flex align-items-center justify-content-between">'
+        f'<h3 class="card-title my-0"><i class="ti ti-send me-2 text-primary"></i>{_esc(asunto)}</h3>'
+        f'<span class="badge badge-modelo">run {run_id}</span>'
+        "</div>"
+        f'<div class="list-group list-group-flush">{cuerpo}</div>'
         "</div>"
     )
 

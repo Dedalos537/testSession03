@@ -10,7 +10,12 @@ from . import validate_params
 _REQUIRED = ["titulo", "asistentes", "agenda", "es_tentativa"]
 
 
-def create_event(args: dict[str, Any]) -> dict[str, Any]:
+def create_event(
+    args: dict[str, Any],
+    *,
+    run_id: str | None = None,
+    origen: str | None = None,
+) -> dict[str, Any]:
     """Crea un evento (propuesta tentativa) en Calendar. Devuelve {ok, id, ...}."""
     error = validate_params(args, _REQUIRED)
     if error:
@@ -24,6 +29,8 @@ def create_event(args: dict[str, Any]) -> dict[str, Any]:
         fecha_propuesta=args.get("fecha_propuesta"),
         hora_propuesta=args.get("hora_propuesta"),
         duracion_minutos=args.get("duracion_minutos", 30),
+        run_id=run_id,
+        origen=origen,
     )
     return {
         "ok": True,

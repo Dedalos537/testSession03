@@ -22,6 +22,7 @@ from groq.types.chat import ChatCompletionMessage  # noqa: F401  (tipado)
 
 from . import db
 from .config import MODEL, require_api_key
+from .redactar import redactar
 from .services import calendar, crm, jira, slack
 from .system_prompt import SYSTEM_PROMPT
 from .tools import ORDER, TOOLS
@@ -31,6 +32,8 @@ MAX_TOKENS = 4096
 MAX_ATTEMPTS = 4
 MAX_ROUNDS = 4
 MAX_CORRECTIVOS = 2
+# Riesgo 2 - minimizacion de datos: solo el historial mas reciente viaja al modelo
+MAX_HISTORY_MESSAGES = 20
 
 REGISTRY: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "actualizar_contacto_en_crm": crm.upsert_contact,
@@ -130,34 +133,72 @@ def _tool_calls_payload(tool_calls: list[Any]) -> list[dict[str, Any]]:
     ]
 
 
-def dispatch(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Ejecuta la funcion (implementacion local = "soa externa" simulada)."""
+def dispatch(
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    run_id: str | None = None,
+    email_id: int | None = None,
+    origen: str | None = None,
+    usuario: str | None = None,
+) -> dict[str, Any]:
+    """Ejecuta la funcion (implementacion local = "soa externa" simulada).
+
+    Valida primero (parametros obligatorios + enum en el servicio), registra
+    trazabilidad (run_id, origen) en el registro creado y deja constancia en el
+    log de auditoria. No "inventa" datos: si la validacion falla, NO se persiste.
+    """
     fn = REGISTRY.get(name)
     if fn is None:
-        return {"ok": False, "error": f"funcion '{name}' no registrada"}
+        out = {"ok": False, "error": f"funcion '{name}' no registrada"}
+        _audit(run_id, email_id, name, out, usuario)
+        return out
     try:
-        return fn(arguments)
+        out = fn(arguments, run_id=run_id, origen=origen)
     except TypeError as exc:
-        return {"ok": False, "error": f"parametros invalidos para '{name}': {exc}"}
+        out = {"ok": False, "error": f"parametros invalidos para '{name}': {exc}"}
+    _audit(run_id, email_id, name, out, usuario)
+    return out
+
+
+def _audit(
+    run_id: str | None,
+    email_id: int | None,
+    nombre: str,
+    out: dict[str, Any],
+    usuario: str | None,
+) -> None:
+    db.log_auditoria(
+        run_id=run_id,
+        email_id=email_id,
+        accion=nombre,
+        estado="ejecutada" if out.get("ok") else "rechazada",
+        detalle=out,
+        usuario=usuario,
+    )
 
 
 def _build_messages(thread_id: int, db_path: Any = None) -> list[dict[str, Any]]:
-    history = db.get_thread_messages(thread_id, db_path)
+    history = db.get_thread_messages(thread_id, db_path)[-MAX_HISTORY_MESSAGES:]
     return [{"role": "system", "content": SYSTEM_PROMPT}] + [
-        {"role": m["role"], "content": m["content"]} for m in history
+        {"role": m["role"], "content": redactar(m["content"])} for m in history
     ]
 
 
 def email_to_user_message(email: dict[str, Any]) -> str:
-    """Normaliza un correo como Message rol 'user' (equivalente al Paso 2 del diseno)."""
+    """Normaliza un correo como Message rol 'user' (equivalente al Paso 2 del diseno).
+
+    El cuerpo se pasa por el filtro de redaccion (Riesgo 2): el modelo nunca
+    recibe numeros de tarjeta, CUIT/DNI o telefonos completos.
+    """
     adjuntos = ", ".join(email.get("adjuntos", [])) or "ninguno"
     return (
         f"[EMAIL ID: {email['id']}]\n"
         f"De: {email['remitente']}\n"
         f"Fecha: {email['fecha']}\n"
-        f"Asunto: {email['asunto']}\n"
+        f"Asunto: {redactar(email['asunto'])}\n"
         f"Adjuntos: {adjuntos}\n"
-        f"Cuerpo:\n{email['cuerpo']}\n"
+        f"Cuerpo:\n{redactar(email['cuerpo'])}\n"
     )
 
 
@@ -171,7 +212,15 @@ def add_email_to_thread(email: dict[str, Any], db_path: Any = None) -> int:
     return -1
 
 
-def run_assistant(thread_id: int, client: Groq | None = None, db_path: Any = None) -> dict[str, Any]:
+def run_assistant(
+    thread_id: int,
+    client: Groq | None = None,
+    db_path: Any = None,
+    *,
+    email_id: int | None = None,
+    origen: str | None = None,
+    usuario: str | None = None,
+) -> dict[str, Any]:
     """Ejecuta un Run completo sobre el thread indicado.
 
     Devuelve: {thread_id, run_id, estado, resumen_final, tool_calls}
@@ -180,6 +229,9 @@ def run_assistant(thread_id: int, client: Groq | None = None, db_path: Any = Non
     repartir las acciones del correo en distintos turnos). Se limita a
     ``MAX_ROUNDS``; si aun asi nunca produce texto, se entrega un resumen
     determinista con los resultados ya ejecutados.
+
+    ``email_id`` / ``origen`` / ``usuario`` alimentan la trazabilidad (Riesgo 1)
+    y el log de auditoria (Riesgo 2).
     """
     if client is None:
         client = make_client()
@@ -228,7 +280,14 @@ def run_assistant(thread_id: int, client: Groq | None = None, db_path: Any = Non
             else:
                 ejecutadas.add(name)
                 nuevas += 1
-                out = dispatch(name, arguments)
+                out = dispatch(
+                    name,
+                    arguments,
+                    run_id=run_id,
+                    email_id=email_id,
+                    origen=origen,
+                    usuario=usuario,
+                )
             executed.append({"name": name, "arguments": arguments, "output": out})
             # submit_tool_outputs equivalente: un mensaje 'tool' por tool_call_id
             messages.append({
@@ -263,21 +322,55 @@ def run_assistant(thread_id: int, client: Groq | None = None, db_path: Any = Non
 
 
 def resumen_determinista(executed: list[dict[str, Any]]) -> str:
-    """Resumen de respaldo (sin modelo) a partir de los resultados ejecutados."""
+    """Resumen de respaldo (sin modelo) legible, SIN dumps JSON crudos.
+
+    Riesgo 1: cada accion cita su resultado y las tentativas quedan marcadas
+    como pendientes de confirmacion humana; los errores de validacion se
+    listan como NO ejecutadas en "Pendientes y alertas".
+    """
     if not executed:
         return "Sin accion requerida."
-    lines = [f"Procesamiento completado. Acciones ejecutadas ({len(executed)}):"]
+    lineas = [f"Procesamiento completado. Acciones ejecutadas ({len(executed)}):"]
+    pendientes: list[str] = []
     for tc in executed:
         out = tc["output"]
-        estado = "OK" if out.get("ok") else "ERROR"
-        lines.append(f"- {tc['name']}: {estado} -> {json.dumps(out, ensure_ascii=False)}")
-    return "\n".join(lines)
+        detalle = out.get("message") or out.get("error") or out.get("info") or "OK"
+        if out.get("ok"):
+            sufijo = ""
+            if out.get("es_tentativa"):
+                sufijo = " (propuesta tentativa: pendiente de confirmacion humana)"
+                pendientes.append(
+                    "Confirmar fecha/hora de la reunion con el cliente antes de"
+                    " tratarla como cerrada."
+                )
+            lineas.append(f"- {tc['name']}: {detalle}{sufijo}")
+        else:
+            lineas.append(f"- {tc['name']}: NO ejecutada")
+            pendientes.append(f"{tc['name']}: {detalle}")
+    if pendientes:
+        lineas.append("Pendientes y alertas:")
+        lineas += [f"- {p}" for p in dict.fromkeys(pendientes)]
+    return "\n".join(lineas)
 
 
-def process_email(email: dict[str, Any], client: Groq | None = None, db_path: Any = None) -> dict[str, Any]:
+def process_email(
+    email: dict[str, Any],
+    client: Groq | None = None,
+    db_path: Any = None,
+    *,
+    usuario: str | None = None,
+) -> dict[str, Any]:
     """Procesa un correo pendiente: lo añade al thread, ejecuta el Run y lo marca procesado."""
     thread_id = int(email["thread_id"])
+    origen = f"EMAIL {email['id']} · {email['fecha']} · {email['asunto']}"
     add_email_to_thread(email, db_path)
-    result = run_assistant(thread_id, client=client, db_path=db_path)
+    result = run_assistant(
+        thread_id,
+        client=client,
+        db_path=db_path,
+        email_id=email["id"],
+        origen=origen,
+        usuario=usuario,
+    )
     db.mark_email_processed(email["id"], result["run_id"], db_path)
     return result

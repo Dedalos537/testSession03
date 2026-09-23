@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS users (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     nombre     TEXT    NOT NULL,
     email      TEXT    NOT NULL UNIQUE,
-    pass_hash  TEXT    NOT NULL
+    pass_hash  TEXT    NOT NULL,
+    rol        TEXT    NOT NULL DEFAULT 'Equipo'
 );
 
 CREATE TABLE IF NOT EXISTS threads (
@@ -69,6 +70,8 @@ CREATE TABLE IF NOT EXISTS jira_tasks (
     prioridad          TEXT    NOT NULL,
     cliente_relacionado TEXT   NOT NULL,
     fecha_limite       TEXT,
+    run_id             TEXT,
+    origen             TEXT,
     created_at         TEXT    NOT NULL
 );
 
@@ -81,6 +84,8 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     duracion_minutos INTEGER,
     agenda           TEXT    NOT NULL,
     es_tentativa     INTEGER NOT NULL DEFAULT 1,
+    run_id           TEXT,
+    origen           TEXT,
     created_at       TEXT    NOT NULL
 );
 
@@ -93,6 +98,8 @@ CREATE TABLE IF NOT EXISTS crm_contacts (
     interes_principal           TEXT,
     ultima_interaccion_resumen  TEXT    NOT NULL,
     documentos_adjuntos         TEXT    NOT NULL DEFAULT '[]',
+    run_id                      TEXT,
+    origen                      TEXT,
     updated_at                  TEXT    NOT NULL
 );
 
@@ -103,9 +110,40 @@ CREATE TABLE IF NOT EXISTS slack_messages (
     acciones_realizadas TEXT    NOT NULL DEFAULT '[]',
     alertas             TEXT    NOT NULL DEFAULT '[]',
     nivel_urgencia      TEXT    NOT NULL DEFAULT 'Normal',
+    run_id              TEXT,
+    origen              TEXT,
     created_at          TEXT    NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS auditoria (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT    NOT NULL,
+    run_id     TEXT,
+    email_id   INTEGER,
+    accion     TEXT    NOT NULL,
+    estado     TEXT    NOT NULL,
+    detalle    TEXT    NOT NULL DEFAULT '{}',
+    usuario    TEXT
+);
 """
+
+
+_EXTRA_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "users": [("rol", "TEXT NOT NULL DEFAULT 'Equipo'")],
+    "jira_tasks": [("run_id", "TEXT"), ("origen", "TEXT")],
+    "calendar_events": [("run_id", "TEXT"), ("origen", "TEXT")],
+    "crm_contacts": [("run_id", "TEXT"), ("origen", "TEXT")],
+    "slack_messages": [("run_id", "TEXT"), ("origen", "TEXT")],
+}
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """Migra bases creadas antes de las nuevas columnas (idempotente, ALTER IF NOT EXISTS)."""
+    for tabla, columnas in _EXTRA_COLUMNS.items():
+        existentes = {row["name"] for row in conn.execute(f"PRAGMA table_info({tabla})")}
+        for nombre, ddl in columnas:
+            if nombre not in existentes:
+                conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {nombre} {ddl}")
 
 
 def utcnow() -> str:
@@ -127,10 +165,11 @@ def get_connection(db_path: Path | str | None = None) -> sqlite3.Connection:
 
 
 def init_db(db_path: Path | str | None = None) -> None:
-    """Crea las tablas (idempotente)."""
+    """Crea las tablas (idempotente) y migra columnas nuevas sobre bases existentes."""
     conn = get_connection(db_path)
     try:
         conn.executescript(_SCHEMA)
+        _ensure_columns(conn)
         conn.commit()
     finally:
         conn.close()
@@ -179,12 +218,12 @@ def seed(db_path: Path | str | None = None, password: str = "demo123") -> None:
         p1 = _hash_password(password)
         p2 = _hash_password(password)
         conn.execute(
-            "INSERT INTO users (nombre, email, pass_hash) VALUES (?, ?, ?)",
-            ("Bernardo Rivera", "bernie.rivera@utpconsult.com", p1),
+            "INSERT INTO users (nombre, email, pass_hash, rol) VALUES (?, ?, ?, ?)",
+            ("Bernardo Rivera", "bernie.rivera@utpconsult.com", p1, "Gerencia"),
         )
         conn.execute(
-            "INSERT INTO users (nombre, email, pass_hash) VALUES (?, ?, ?)",
-            ("Odalis Dominguez", "odalis.dominguez@utpconsult.com", p2),
+            "INSERT INTO users (nombre, email, pass_hash, rol) VALUES (?, ?, ?, ?)",
+            ("Odalis Dominguez", "odalis.dominguez@utpconsult.com", p2, "Equipo"),
         )
 
         now = utcnow()
@@ -409,6 +448,8 @@ def create_jira_task(
     prioridad: str,
     cliente_relacionado: str,
     fecha_limite: str | None = None,
+    run_id: str | None = None,
+    origen: str | None = None,
     db_path: Path | str | None = None,
 ) -> dict[str, Any]:
     conn = get_connection(db_path)
@@ -416,10 +457,10 @@ def create_jira_task(
         task_id = int(
             conn.execute(
                 "INSERT INTO jira_tasks (key, proyecto_key, titulo, descripcion, "
-                "prioridad, cliente_relacionado, fecha_limite, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "prioridad, cliente_relacionado, fecha_limite, run_id, origen, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (key, proyecto_key, titulo, descripcion, prioridad,
-                 cliente_relacionado, fecha_limite, utcnow()),
+                 cliente_relacionado, fecha_limite, run_id, origen, utcnow()),
             ).lastrowid
         )
         return {"id": task_id, "key": key, "proyecto": proyecto_key}
@@ -446,6 +487,8 @@ def create_calendar_event(
     fecha_propuesta: str | None = None,
     hora_propuesta: str | None = None,
     duracion_minutos: int | None = 30,
+    run_id: str | None = None,
+    origen: str | None = None,
     db_path: Path | str | None = None,
 ) -> dict[str, Any]:
     conn = get_connection(db_path)
@@ -453,10 +496,11 @@ def create_calendar_event(
         event_id = int(
             conn.execute(
                 "INSERT INTO calendar_events (titulo, asistentes, fecha_propuesta, "
-                "hora_propuesta, duracion_minutos, agenda, es_tentativa, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "hora_propuesta, duracion_minutos, agenda, es_tentativa, run_id, origen, "
+                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (titulo, _dumps(list(asistentes)), fecha_propuesta, hora_propuesta,
-                 duracion_minutos, agenda, 1 if es_tentativa else 0, utcnow()),
+                 duracion_minutos, agenda, 1 if es_tentativa else 0, run_id, origen,
+                 utcnow()),
             ).lastrowid
         )
         return {"id": event_id, "titulo": titulo, "es_tentativa": es_tentativa}
@@ -484,6 +528,8 @@ def upsert_crm_contact(
     ultima_interaccion_resumen: str,
     interes_principal: str | None = None,
     documentos_adjuntos: Iterable[str] = (),
+    run_id: str | None = None,
+    origen: str | None = None,
     db_path: Path | str | None = None,
 ) -> dict[str, Any]:
     conn = get_connection(db_path)
@@ -497,21 +543,22 @@ def upsert_crm_contact(
             conn.execute(
                 "UPDATE crm_contacts SET nombre_contacto = ?, empresa = ?, "
                 "etapa_pipeline = ?, interes_principal = ?, "
-                "ultima_interaccion_resumen = ?, documentos_adjuntos = ?, updated_at = ? "
-                "WHERE id = ?",
+                "ultima_interaccion_resumen = ?, documentos_adjuntos = ?, "
+                "run_id = ?, origen = ?, updated_at = ? WHERE id = ?",
                 (nombre_contacto, empresa, etapa_pipeline, interes_principal,
-                 ultima_interaccion_resumen, _dumps(list(documentos_adjuntos)), now,
-                 row["id"]),
+                 ultima_interaccion_resumen, _dumps(list(documentos_adjuntos)),
+                 run_id, origen, now, row["id"]),
             )
             return {"id": row["id"], "accion": "actualizado"}
         contact_id = int(
             conn.execute(
                 "INSERT INTO crm_contacts (nombre_contacto, empresa, correo_electronico, "
                 "etapa_pipeline, interes_principal, ultima_interaccion_resumen, "
-                "documentos_adjuntos, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "documentos_adjuntos, run_id, origen, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (nombre_contacto, empresa, correo_electronico, etapa_pipeline,
                  interes_principal, ultima_interaccion_resumen,
-                 _dumps(list(documentos_adjuntos)), now),
+                 _dumps(list(documentos_adjuntos)), run_id, origen, now),
             ).lastrowid
         )
         return {"id": contact_id, "accion": "creado"}
@@ -537,6 +584,8 @@ def create_slack_message(
     acciones_realizadas: Iterable[str],
     nivel_urgencia: str,
     alertas: Iterable[str] = (),
+    run_id: str | None = None,
+    origen: str | None = None,
     db_path: Path | str | None = None,
 ) -> dict[str, Any]:
     conn = get_connection(db_path)
@@ -544,10 +593,10 @@ def create_slack_message(
         msg_id = int(
             conn.execute(
                 "INSERT INTO slack_messages (canal, resumen_ejecutivo, "
-                "acciones_realizadas, alertas, nivel_urgencia, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "acciones_realizadas, alertas, nivel_urgencia, run_id, origen, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (canal, resumen_ejecutivo, _dumps(list(acciones_realizadas)),
-                 _dumps(list(alertas)), nivel_urgencia, utcnow()),
+                 _dumps(list(alertas)), nivel_urgencia, run_id, origen, utcnow()),
             ).lastrowid
         )
         return {"id": msg_id, "canal": canal}
@@ -569,4 +618,74 @@ def list_slack_messages(db_path: Path | str | None = None) -> list[dict[str, Any
             for r in rows
         ]
     finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Auditoria (Riesgo 2): trazabilidad de cada accion del asistente
+# --------------------------------------------------------------------------- #
+
+def log_auditoria(
+    run_id: str | None,
+    accion: str,
+    estado: str,
+    detalle: dict[str, Any] | str,
+    email_id: int | None = None,
+    usuario: str | None = None,
+    db_path: Path | str | None = None,
+) -> int:
+    conn = get_connection(db_path)
+    try:
+        if isinstance(detalle, dict):
+            detalle = _dumps(detalle)
+        return int(
+            conn.execute(
+                "INSERT INTO auditoria (created_at, run_id, email_id, accion, "
+                "estado, detalle, usuario) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (utcnow(), run_id, email_id, accion, estado, detalle, usuario),
+            ).lastrowid
+        )
+    finally:
+        conn.commit()
+        conn.close()
+
+
+def list_auditoria(
+    limit: int = 200, db_path: Path | str | None = None
+) -> list[dict[str, Any]]:
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM auditoria ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) | {"detalle": _loads(r["detalle"])} for r in rows]
+    finally:
+        conn.close()
+
+
+def confirmar_evento(event_id: int, usuario: str, db_path: Path | str | None = None) -> bool:
+    """Punto de control humano: confirma una propuesta tentativa (es_tentativa -> 0)."""
+    conn = get_connection(db_path)
+    try:
+        cur = conn.execute(
+            "UPDATE calendar_events SET es_tentativa = 0 WHERE id = ?", (event_id,)
+        )
+        confirmado = cur.rowcount > 0
+        if confirmado:
+            conn.execute(
+                "INSERT INTO auditoria (created_at, run_id, email_id, accion, "
+                "estado, detalle, usuario) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    utcnow(),
+                    None,
+                    None,
+                    "confirmar_evento",
+                    "ejecutada",
+                    _dumps({"event_id": event_id, "usuario": usuario}),
+                    usuario,
+                ),
+            )
+        return confirmado
+    finally:
+        conn.commit()
         conn.close()

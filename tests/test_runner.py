@@ -150,3 +150,90 @@ def test_runner_reintenta_error_429(dbfile):
     assert res["estado"] == "completed"
     # primera llamada (429) + segunda (tool_calls) + tercera (resumen)
     assert len(client.chat.completions.calls) == 3
+
+
+# --------------------------------------------------------------------------- #
+# Guardarrailes: Riesgo 1 (alucinaciones) y Riesgo 2 (seguridad/privacidad)
+# --------------------------------------------------------------------------- #
+
+def test_runner_redacta_datos_sensibles_antes_del_modelo(dbfile):
+    """Riesgo 2: el numero de tarjeta no viaja al modelo; la bandeja lo conserva."""
+    eid = inbox.send_email(
+        "Luis Perez <luis@corp.com>",
+        "Adjunto datos de pago",
+        "Hola, mi tarjeta es 4111 1111 1111 1111, DNI 98765432, tel 999888777.",
+        empresa="Corp SAC",
+    )
+    mail = next(e for e in db.list_emails() if e["id"] == eid)
+    client = FakeClient(tool_calls_first=False, text_content="Sin accion requerida.")
+    runner.process_email(mail, client=client)
+
+    payload = "".join(
+        m.get("content") or ""
+        for msgs in (c.get("messages", []) for c in client.chat.completions.calls)
+        for m in msgs
+        if m["role"] == "user"
+    )
+    assert "4111 1111 1111 1111" not in payload
+    assert "98765432" not in payload
+    assert "999888777" not in payload
+    assert "[NUMERO DE TARJETA]" in payload
+
+    original = next(e for e in db.list_emails() if e["id"] == eid)
+    assert "4111 1111 1111 1111" in original["cuerpo"]
+
+
+def test_historial_limitado_al_modelo(dbfile):
+    """Riesgo 2 (minimizacion): solo las ultimas N=20 mensajes + el system prompt."""
+    email = _primer_pendiente()
+    t = email["thread_id"]
+    for i in range(25):
+        db.add_message(t, "user", f"mensaje historico #{i}")
+    messages = runner._build_messages(t)
+    assert len(messages) == runner.MAX_HISTORY_MESSAGES + 1  # + system
+    contenido = " ".join(m["content"] for m in messages)
+    assert "mensaje historico #24" in contenido
+    assert "mensaje historico #0" not in contenido
+
+
+def test_registros_traen_origen_y_auditoria(dbfile):
+    """Riesgo 1 (trazabilidad): cada registro cita su origen; cada accion queda auditada."""
+    client = FakeClient()
+    email = _primer_pendiente()
+    res = runner.process_email(email, client=client)
+
+    tarea = db.list_jira_tasks()[0]
+    assert tarea["run_id"] == res["run_id"]
+    assert tarea["origen"].startswith(f"EMAIL {email['id']}")
+    contacto = db.list_crm_contacts()[0]
+    assert contacto["origen"].startswith("EMAIL ")
+
+    auditoria = db.list_auditoria()
+    acciones = [a for a in auditoria if a["accion"] in ("actualizar_contacto_en_crm", "crear_tarea_en_jira")]
+    assert len(acciones) == 2
+    assert {a["estado"] for a in acciones} == {"ejecutada"}
+    assert all(a["run_id"] == res["run_id"] for a in acciones)
+
+
+def test_resumen_determinista_legible_sin_json(dbfile):
+    """El resumen de respaldo no vuelca JSON crudo ni duplica series de dicts."""
+    resumen = runner.resumen_determinista([
+        {
+            "name": "crear_tarea_en_jira",
+            "output": {"ok": True, "message": "Tarea PAGOS-1 creada en Jira", "key": "PAGOS-1"},
+        },
+        {
+            "name": "agendar_reunion_en_google_calendar",
+            "output": {
+                "ok": True,
+                "es_tentativa": True,
+                "message": "Evento tentativo creado (pendiente de confirmacion)",
+            },
+        },
+        {"name": "enviar_notificacion_interna", "output": {"ok": False, "error": "faltan parametros"}},
+    ])
+    assert "-> {" not in resumen
+    assert "{'ok'" not in resumen
+    assert "Pendientes y alertas" in resumen
+    assert "NO ejecutada" in resumen
+    assert "pendiente de confirmacion humana" in resumen

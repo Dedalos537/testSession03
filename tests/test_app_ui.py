@@ -80,3 +80,53 @@ def test_seed_provee_correos_y_los_muestra_como_tarjetas(at: AppTest) -> None:
     assert not at.exception
     html = _html(at)
     assert "asunto" in html.lower() or "techcorp" in html.lower()
+
+
+def _login_como(at: AppTest, nombre: str) -> None:
+    at.selectbox[0].select(nombre)
+    at.text_input[0].input("demo123")
+    at.button[0].click()
+    at.run()
+    assert not at.exception
+
+
+def test_revision_gerencia_confirmar_tentativa(at: AppTest, tmp_path) -> None:
+    """Riesgo 1 (punto de control) y Riesgo 2 (auditoria): Gerencia confirma y queda en el log."""
+    _login_como(at, "Bernardo Rivera")
+    assert "Gerencia" in _html(at)
+    ev = db.create_calendar_event(
+        titulo="Reunion pagos - TechCorp",
+        asistentes=["ana.torres@techcorp.com"],
+        agenda="modulo de pagos",
+        es_tentativa=True,
+        origen="EMAIL 1",
+    )
+    at.run()
+    assert not at.exception
+    confirmar = [b for b in at.button if b.label == "Confirmar"]
+    assert len(confirmar) == 1
+    confirmar[0].click()
+    at.run()
+    assert not at.exception
+    evento = next(e for e in db.list_calendar_events() if e["id"] == ev["id"])
+    assert evento["es_tentativa"] == 0
+    auditoria = [a for a in db.list_auditoria() if a["accion"] == "confirmar_evento"]
+    assert len(auditoria) == 1
+
+
+def test_revision_equipo_no_puede_confirmar_rbac(at: AppTest) -> None:
+    """Riesgo 2 (RBAC): el rol Equipo ve la propuesta pero no el boton Confirmar."""
+    _login_como(at, "Odalis Dominguez")
+    db.create_calendar_event(
+        titulo="Reunion avance - TechCorp",
+        asistentes=["ana.torres@techcorp.com"],
+        agenda="avance",
+        es_tentativa=True,
+        origen="EMAIL 1",
+    )
+    at.run()
+    assert not at.exception
+    confirmar = [b for b in at.button if b.label == "Confirmar"]
+    assert confirmar == []
+    html = _html(at)
+    assert "Solo Gerencia (RBAC)" in html

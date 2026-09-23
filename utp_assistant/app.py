@@ -29,7 +29,7 @@ def _usuarios() -> list[dict[str, Any]]:
     conn = db.get_connection()
     try:
         return [dict(r) for r in conn.execute(
-            "SELECT id, nombre, email, pass_hash FROM users ORDER BY id"
+            "SELECT id, nombre, email, pass_hash, rol FROM users ORDER BY id"
         ).fetchall()]
     finally:
         conn.close()
@@ -99,11 +99,17 @@ def pestana_bandeja() -> None:
             with st.status("Ejecutando Run(s)...", expanded=True) as status:
                 for email in pendientes:
                     try:
-                        res = runner.process_email(email, client=client)
-                        st.write(f"**{email['asunto']}** (run {res['run_id']})")
-                        st.code(res["resumen_final"] or "(sin resumen)", language="text")
-                        for tc in res["tool_calls"]:
-                            st.caption(f"- {tc['name']} -> {tc['output']}")
+                        res = runner.process_email(
+                            email,
+                            client=client,
+                            usuario=st.session_state["user"]["email"],
+                        )
+                        st.markdown(
+                            theme.run_card(email["asunto"], res),
+                            unsafe_allow_html=True,
+                        )
+                        with st.expander("Resumen completo en texto"):
+                            st.code(res["resumen_final"] or "(sin resumen)", language="text")
                     except Exception:  # noqa: BLE001 - la UI debe absorber cualquier fallo del run
                         st.error(
                             f"Fallo procesando {email['asunto']}:\n{traceback.format_exc()}"
@@ -191,11 +197,102 @@ def pestana_chat() -> None:
         db.add_message(thread_id, "user", texto)
         try:
             with st.spinner("Ejecutando Run..."):
-                res = runner.run_assistant(thread_id, client=_get_client())
+                res = runner.run_assistant(
+                    thread_id,
+                    client=_get_client(),
+                    usuario=st.session_state["user"]["email"],
+                )
             with st.chat_message("assistant"):
                 st.markdown(res["resumen_final"])
         except Exception as exc:  # noqa: BLE001
             st.error(f"Error en el Run: {exc}")
+
+
+def _detalle_auditoria(detalle: dict[str, Any]) -> str:
+    for clave in ("message", "error", "info"):
+        if detalle.get(clave):
+            return str(detalle.get(clave))
+    return "ok" if detalle.get("ok") else "rechazada"
+
+
+def pestana_revision() -> None:
+    st.markdown(
+        '<h3 class="h5 mb-1"><i class="ti ti-shield-check me-2 text-primary"></i>'
+        "Punto de control humano (Riesgo 1)</h3>",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Las propuestas tentativas (reuniones sin fecha/hora exacta confirmada) quedan "
+        "pendientes de validacion: solo Gerencia puede confirmarlas (Riesgo 2 - RBAC)."
+    )
+
+    pendientes = [ev for ev in db.list_calendar_events() if ev.get("es_tentativa")]
+    if pendientes:
+        for ev in pendientes:
+            c1, c2, c3, c4 = st.columns([3, 1, 2, 2])
+            c1.markdown(
+                f'<div class="fw-semibold">{theme._esc(ev["titulo"])}</div>'
+                f'<div class="text-muted small">origen: {theme._esc(ev.get("origen") or "chat")}</div>',
+                unsafe_allow_html=True,
+            )
+            c2.markdown(
+                '<span class="badge badge-pendiente">tentativa</span>',
+                unsafe_allow_html=True,
+            )
+            c3.markdown(
+                f'<div class="text-muted small">'
+                f'{ev.get("fecha_propuesta") or "sin fecha"} · {ev.get("hora_propuesta") or "sin hora"}'
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            usuario = st.session_state["user"]
+            if usuario.get("rol") == "Gerencia":
+                if c4.button("Confirmar", key=f"confirmar_{ev['id']}", use_container_width=True):
+                    db.confirmar_evento(ev["id"], usuario=usuario["email"])
+                    st.rerun()
+            else:
+                c4.markdown(
+                    '<span class="text-muted small">Solo Gerencia (RBAC)</span>',
+                    unsafe_allow_html=True,
+                )
+        st.divider()
+    else:
+        st.markdown(
+            theme.empty_state(
+                "ti-calendar-check",
+                "Sin propuestas pendientes de validacion",
+                "Los eventos tentativos creados por el asistente aparecerán aquí para su "
+                "confirmación humana antes de comunicarlos al cliente.",
+            ),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        '<h3 class="h5 mt-4 mb-2"><i class="ti ti-shield-lock me-2 text-primary"></i>'
+        "Log de auditoría (Riesgo 2)</h3>",
+        unsafe_allow_html=True,
+    )
+    aud = db.list_auditoria(limit=50)
+    st.markdown(
+        theme.tabla_tabler(
+            "Acciones registradas",
+            "ti-shield-lock",
+            ["Fecha", "Run", "Acción", "Estado", "Usuario", "Detalle"],
+            [
+                (
+                    a["created_at"],
+                    a.get("run_id") or "—",
+                    a["accion"],
+                    "ejecutada" if a["estado"] == "ejecutada" else a["estado"],
+                    a.get("usuario") or "—",
+                    _detalle_auditoria(a.get("detalle") or {}),
+                )
+                for a in aud
+            ],
+            "Aún no hay acciones registradas en el log de auditoría.",
+        ),
+        unsafe_allow_html=True,
+    )
 
 
 def pestana_resultados() -> None:
@@ -215,15 +312,15 @@ def pestana_resultados() -> None:
         unsafe_allow_html=True,
     )
 
-    tab_jira, tab_crm, tab_cal, tab_slack = st.tabs(
-        ["Jira", "CRM", "Calendar", "Slack"]
+    tab_jira, tab_crm, tab_cal, tab_slack, tab_rev = st.tabs(
+        ["Jira", "CRM", "Calendar", "Slack", "🧪 Revisión humana"]
     )
     with tab_jira:
         st.markdown(
             theme.tabla_tabler(
                 "Tareas de proyecto",
                 "ti-bug",
-                ["Clave", "Título", "Prioridad", "Cliente", "Fecha límite"],
+                ["Clave", "Título", "Prioridad", "Cliente", "Fecha límite", "Origen"],
                 [
                     (
                         j["key"],
@@ -231,6 +328,7 @@ def pestana_resultados() -> None:
                         j["prioridad"],
                         j["cliente_relacionado"],
                         j.get("fecha_limite") or "—",
+                        j.get("origen") or "—",
                     )
                     for j in jira
                 ],
@@ -243,7 +341,7 @@ def pestana_resultados() -> None:
             theme.tabla_tabler(
                 "Contactos del CRM",
                 "ti-address-book",
-                ["Contacto", "Empresa", "Email", "Etapa del pipeline", "Interés", "Última interacción"],
+                ["Contacto", "Empresa", "Email", "Etapa del pipeline", "Interés", "Última interacción", "Origen"],
                 [
                     (
                         c["nombre_contacto"],
@@ -252,6 +350,7 @@ def pestana_resultados() -> None:
                         c["etapa_pipeline"],
                         c.get("interes_principal") or "—",
                         c["ultima_interaccion_resumen"],
+                        c.get("origen") or "—",
                     )
                     for c in crm
                 ],
@@ -285,7 +384,7 @@ def pestana_resultados() -> None:
             theme.tabla_tabler(
                 "Mensajes de Slack",
                 "ti-message-circle",
-                ["Canal", "Resumen ejecutivo", "Urgencia", "Acciones", "Alertas"],
+                ["Canal", "Resumen ejecutivo", "Urgencia", "Acciones", "Alertas", "Origen"],
                 [
                     (
                         m["canal"],
@@ -293,6 +392,7 @@ def pestana_resultados() -> None:
                         m["nivel_urgencia"],
                         ", ".join(m.get("acciones_realizadas") or []) or "—",
                         ", ".join(m.get("alertas") or []) or "—",
+                        m.get("origen") or "—",
                     )
                     for m in slack
                 ],
@@ -300,6 +400,8 @@ def pestana_resultados() -> None:
             ),
             unsafe_allow_html=True,
         )
+    with tab_rev:
+        pestana_revision()
     st.markdown(
         '<p class="text-muted small"><i class="ti ti-database me-1"></i>'
         "Los datos se leen de SQLite en cada render; las tablas muestran su cabecera "

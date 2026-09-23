@@ -24,7 +24,12 @@ _ETAPAS = [
 ]
 
 
-def upsert_contact(args: dict[str, Any]) -> dict[str, Any]:
+def upsert_contact(
+    args: dict[str, Any],
+    *,
+    run_id: str | None = None,
+    origen: str | None = None,
+) -> dict[str, Any]:
     """Crea o actualiza un contacto en el CRM (simulado). Upsert por correo."""
     error = validate_params(args, _REQUIRED)
     if error:
@@ -41,6 +46,8 @@ def upsert_contact(args: dict[str, Any]) -> dict[str, Any]:
         ultima_interaccion_resumen=args["ultima_interaccion_resumen"],
         interes_principal=args.get("interes_principal"),
         documentos_adjuntos=args.get("documentos_adjuntos", []),
+        run_id=run_id,
+        origen=origen,
     )
     return {
         "ok": True,
