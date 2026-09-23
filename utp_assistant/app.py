@@ -13,8 +13,8 @@ from typing import Any
 
 import streamlit as st
 
-from . import db, runner
-from .config import MODEL
+from utp_assistant import db, runner
+from utp_assistant.config import MODEL
 
 st.set_page_config(page_title="UTP Assistant", page_icon="✉️", layout="wide")
 
