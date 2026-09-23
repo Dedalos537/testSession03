@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "utp-assistant"
+version = "0.1.0"
+description = "UTP Assistant - Prototipo de asistente IA para correos simulados (Groq + function calling)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "groq>=0.9.0",
+    "streamlit>=1.36",
+    "python-dotenv>=1.0",
+    "pydantic>=2.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[tool.setuptools.packages.find]
+include = ["utp_assistant*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

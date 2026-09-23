@@ -1,0 +1,1 @@
+"""UTP Assistant - prototipo de asistente IA para correos simulados."""

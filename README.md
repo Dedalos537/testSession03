@@ -1,73 +1,61 @@
-# Semana 06 - Chatbot multimodal con Groq y Streamlit
+# UTP Assistant
 
-Proyecto de laboratorio alineado con la Sesión 2 de la Unidad 2.
-Usa la API de **Groq** (compatible con OpenAI) para el chatbot y la transcripción de audio.
+Prototipo del asistente de IA "UTP Assistant" para la gestión de correos simulados
+en una red interna de 2 usuarios, basado en la propuesta de diseño técnico del grupo.
 
-## Objetivos
+## Stack
 
-- Implementar un chatbot sobre comida peruana.
-- Crear una interfaz con Streamlit.
-- Mantener el historial de conversación durante la sesión.
-- Transcribir un archivo de audio mediante la API de transcripción de Groq.
+- Python 3.11+
+- [Groq API](https://console.groq.com) (Chat Completions + Local Tool Calling) — modelo `llama-3.3-70b-versatile`
+- Streamlit (UI)
+- SQLite (persistencia: threads, mensajes, y sistemas externos simulados Jira/Calendar/CRM/Slack)
 
-## 1. Requisitos
+> **Nota de arquitectura:** el diseño original plantea la Assistants API de OpenAI.
+> Groq no ofrece Assistants API, por lo que el ciclo del Run (`requires_action` →
+> `submit_tool_outputs`) se replica manualmente en `utp_assistant/runner.py`.
 
-- Python 3.10 o superior.
-- Internet.
-- Cuenta de Groq con clave de API en https://console.groq.com.
-- Visual Studio Code recomendado.
+## Instalación
 
-## 2. Crear entorno virtual (PowerShell)
-
-```powershell
+```bash
+cd utp-assistant
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+source .venv/bin/activate
+pip install -e ".[dev]"
+
+# Configurar la API key (nunca commitearla)
+cp .env.example .env
+# editar .env y pegar GROQ_API_KEY
 ```
 
-## 3. Configurar la clave de API
+## Ejecución
 
-```powershell
-Copy-Item .env.example .env
+```bash
+# UI Streamlit
+streamlit run utp_assistant/app.py
+
+# Tests (sin red, Groq mockeado)
+pytest tests/ -v
+
+# Lint
+ruff check utp_assistant/ tests/
 ```
 
-Abra `.env` y reemplace el marcador `GROQ_API_KEY` por su clave de Groq
-(`gsk_...`). No comparta este archivo ni lo suba a GitHub.
+## Estructura
 
-## 4. Ejecutar
-
-```powershell
-streamlit run app.py
+```bash
+utp-assistant/
+├── docs/Propuesta_UPT_Assistant.md   # documento fuente del diseño
+├── PRPs/001--utp-assistant-correos-asistente.md  # plan de implementación
+├── utp_assistant/
+│   ├── config.py                     # env: GROQ_API_KEY, MODEL, DB_PATH
+│   ├── db.py                         # capa de datos SQLite (schema + seed)
+│   ├── system_prompt.py              # prompt del sistema (sección 2)
+│   ├── tools.py                      # schemas de las 4 funciones (sección 3)
+│   ├── runner.py                     # ciclo del Run (Chat Completions + tool calling)
+│   ├── inbox.py                      # bandeja simulada + conector de ingesta
+│   ├── app.py                        # UI Streamlit (2 usuarios, bandeja, chat, resultados)
+│   └── services/                     # SIM Jira/Calendar/CRM/Slack
+└── tests/                            # test_tools, test_runner, test_system_prompt
 ```
 
-Streamlit mostrará una dirección local, normalmente `http://localhost:8501`.
-
-## 5. Prueba del chatbot
-
-1. Pregunte: `¿Qué es el ceviche peruano?`
-2. Luego pregunte: `¿Y cuáles son sus ingredientes principales?`
-3. Verifique que la segunda respuesta conserve el contexto de la conversación.
-
-## 6. Prueba de audio
-
-1. Abra la pestaña **Transcripción**.
-2. Cargue un archivo corto MP3/WAV/M4A.
-3. Pulse **Transcribir audio**.
-4. Verifique el texto resultante.
-
-## 7. GitHub
-
-Antes de publicar, confirme que `.env` está ignorado:
-
-```powershell
-git status
-```
-
-Nunca publique una clave de API. El repositorio debe contener `.env.example`, no `.env`.
-
-## Nota técnica de actualización
-
-El laboratorio mantiene el recorrido didáctico de Chat Completions, ahora sobre el
-endpoint compatible de Groq (`https://api.groq.com/openai/v1`). El chatbot usa
-modelos como `openai/gpt-oss-120b` y la transcripción usa `whisper-large-v3`.
+Estado: Tasks 1–8 del PRP implementadas. Login: seleccionar usuario y contraseña `demo123`.
