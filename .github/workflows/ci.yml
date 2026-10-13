@@ -1,0 +1,94 @@
+name: TA03 CI/CD
+
+on:
+  push:
+    branches: [TA03]
+  pull_request:
+    branches: [TA03]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ta03-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint HTML y JS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Validar HTML (html-validate)
+        run: npm run lint:html
+      - name: Compilar scripts inline
+        run: npm run lint:js
+
+  packet-tracer:
+    name: Verificar configuración Packet Tracer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Instalar dependencia de descifrado
+        run: pip install twofish==0.3.0
+      - name: Decodificar .pkt y comprobar router, DNS, IoT y gateways
+        run: python tools/verify_pkt.py packet-tracer/Temperature_Control_System.pkt | tee -a "$GITHUB_STEP_SUMMARY"
+
+  e2e:
+    name: Tests E2E (Playwright)
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Instalar Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Ejecutar tests (desktop + mobile)
+        run: npx playwright test
+        env:
+          CI: "true"
+      - name: Subir reporte
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14
+
+  deploy:
+    name: Publicar en GitHub Pages
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/TA03'
+    needs: [lint, packet-tracer, e2e]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preparar sitio
+        run: |
+          mkdir -p _site
+          cp index.html _site/
+          cp packet-tracer/Temperature_Control_System.pkt _site/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

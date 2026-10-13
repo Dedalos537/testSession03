@@ -1,0 +1,17 @@
+{
+  "name": "ta03-simulador-iot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TA 03 - Simulador del pipeline IoT (MQTT -> EMQX -> Telegraf -> InfluxDB -> Grafana) y laboratorio Packet Tracer de control de temperatura",
+  "scripts": {
+    "lint:html": "html-validate index.html",
+    "lint:js": "node tools/check-inline-js.mjs index.html",
+    "lint": "npm run lint:html && npm run lint:js",
+    "test": "playwright test",
+    "serve": "npx --yes http-server -p 8080 -c-1 ."
+  },
+  "devDependencies": {
+    "@playwright/test": "1.48.2",
+    "html-validate": "8.24.1"
+  }
+}

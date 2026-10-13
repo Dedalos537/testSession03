@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulador IoT MQTT</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+:root{
+  color-scheme: dark;
+  --bg:#121211;
+  --surface-1:#1a1a19;
+  --surface-2:#22221f;
+  --surface-3:#2b2b27;
+  --line:#383835;
+  --line-strong:#4a4a45;
+  --text-primary:#f0efec;
+  --text-secondary:#c3c2b7;
+  --text-muted:#a9a89d;
+  --accent:#fab219;          /* ámbar industrial: acciones y foco */
+  --accent-ink:#1a1a19;
+  --series-temp:#d95926;     /* categórico slot 2 (oscuro) */
+  --series-hum:#3987e5;      /* categórico slot 1 (oscuro) */
+  --good:#0ca30c;
+  --warning:#fab219;
+  --critical:#d03b3b;
+  --packet:#fab219;
+  --ack:#199e70;
+  --radius:10px;
+  --font-ui:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:
+    radial-gradient(1200px 500px at 85% -10%, rgba(250,178,25,.06), transparent 60%),
+    repeating-linear-gradient(0deg, transparent 0 31px, rgba(255,255,255,.018) 31px 32px),
+    repeating-linear-gradient(90deg, transparent 0 31px, rgba(255,255,255,.018) 31px 32px),
+    var(--bg);
+  color:var(--text-primary);
+  font:14px/1.5 var(--font-ui);
+  min-height:100vh;
+}
+.sim-banner{
+  position:sticky;top:0;z-index:20;
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  padding:10px 24px;
+  background:repeating-linear-gradient(-45deg,#2a2208 0 12px,#231d07 12px 24px);
+  border-bottom:1px solid #5c4710;
+  font-family:var(--font-mono);font-size:12.5px;color:#fde3a3;
+}
+.sim-banner strong{color:var(--accent);letter-spacing:.08em;text-transform:uppercase}
+.sim-banner .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px rgba(250,178,25,.18)}
+header.top{
+  max-width:1360px;margin:0 auto;padding:28px 24px 8px;
+  display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;
+}
+h1{margin:0;font-size:clamp(22px,3vw,30px);font-weight:700;letter-spacing:-.02em}
+h1 span{color:var(--text-muted);font-weight:500}
+.sub{margin:4px 0 0;color:var(--text-secondary);max-width:70ch}
+.run-state{
+  display:inline-flex;align-items:center;gap:8px;
+  font-family:var(--font-mono);font-size:12px;color:var(--text-secondary);
+  padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface-1);
+}
+.run-state i{width:8px;height:8px;border-radius:50%;background:var(--good);transition:background .2s}
+.run-state.paused i{background:var(--text-muted)}
+main{
+  max-width:1360px;margin:0 auto;padding:16px 24px 48px;
+  display:grid;gap:16px;
+  grid-template-columns:minmax(0,1fr) 340px;
+  grid-template-areas:"topo ctrl" "dash ctrl" "dash cons";
+}
+.panel{
+  background:linear-gradient(180deg,var(--surface-2),var(--surface-1));
+  border:1px solid var(--line);border-radius:var(--radius);
+  padding:16px;min-width:0;
+}
+.panel-h{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px}
+.panel-h h2{margin:0;font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--text-secondary)}
+.panel-h .meta{font-family:var(--font-mono);font-size:11.5px;color:var(--text-muted)}
+#topo{grid-area:topo}
+#ctrl{grid-area:ctrl}
+#dash{grid-area:dash}
+#cons{grid-area:cons}
+
+/* ---------- Topología ---------- */
+.topo-wrap{width:100%;overflow-x:auto}
+#topoSvg{width:100%;min-width:640px;height:auto;display:block}
+#topoSvg .node rect{fill:var(--surface-3);stroke:var(--line-strong);stroke-width:1}
+#topoSvg .node.hot rect{stroke:var(--accent)}
+#topoSvg .node text{fill:var(--text-primary);font:600 12px var(--font-ui)}
+#topoSvg .node text.s{fill:var(--text-muted);font:400 11px var(--font-mono)}
+#topoSvg .host{fill:none;stroke:var(--line-strong);stroke-dasharray:4 4}
+#topoSvg .host-l{fill:var(--text-muted);font:500 11px var(--font-mono);letter-spacing:.08em}
+#topoSvg .wire{fill:none;stroke:var(--line-strong);stroke-width:2}
+#topoSvg .wire.wifi{stroke-dasharray:3 5}
+#topoSvg .wl{fill:var(--text-muted);font:400 11px var(--font-mono)}
+#topoSvg .pkt{fill:var(--packet)}
+#topoSvg .pkt.spike{fill:var(--critical)}
+#topoSvg .ack{fill:var(--ack)}
+#topoSvg .node .led{fill:var(--good)}
+#topoSvg.paused .node .led{fill:var(--text-muted)}
+.node rect{transition:stroke .3s}
+
+/* ---------- Controles ---------- */
+.ctl{margin:0 0 16px}
+.ctl .lbl,.ctl > label{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:var(--text-secondary);margin-bottom:6px}
+.ctl output{font-family:var(--font-mono);font-size:13px;color:var(--text-primary)}
+input[type=range]{width:100%;appearance:none;-webkit-appearance:none;height:28px;background:transparent;margin:0}
+input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:linear-gradient(90deg,var(--accent) var(--p,50%),var(--line-strong) var(--p,50%))}
+input[type=range]::-moz-range-track{height:4px;border-radius:2px;background:var(--line-strong)}
+input[type=range]::-moz-range-progress{height:4px;border-radius:2px;background:var(--accent)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;margin-top:-6px;border-radius:50%;background:var(--text-primary);border:3px solid var(--accent);transition:transform .15s}
+input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:var(--text-primary);border:3px solid var(--accent)}
+input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.15)}
+input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line-strong);border-radius:8px;overflow:hidden}
+.seg button{all:unset;cursor:pointer;text-align:center;padding:8px 0;font:500 13px var(--font-mono);color:var(--text-secondary);transition:background .15s,color .15s}
+.seg button+button{border-left:1px solid var(--line-strong)}
+.seg button:hover{background:var(--surface-3);color:var(--text-primary)}
+.seg button[aria-pressed=true]{background:var(--accent);color:var(--accent-ink)}
+.qos-help{margin:6px 0 0;font-size:12px;color:var(--text-muted)}
+.btns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.btn{
+  appearance:none;cursor:pointer;border-radius:8px;padding:10px 12px;
+  font:600 13px var(--font-ui);display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  background:var(--surface-3);color:var(--text-primary);border:1px solid var(--line-strong);
+  transition:background .15s,border-color .15s,transform .1s;
+}
+.btn:hover{border-color:var(--text-muted);background:#33332e}
+.btn:active{transform:translateY(1px)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.primary:hover{background:#ffc23f}
+.btn.danger{border-color:#7a2a2a;color:#ffb4b4}
+.btn.danger:hover{background:#3a1d1d;border-color:var(--critical)}
+.btn svg{width:14px;height:14px}
+.divider{height:1px;background:var(--line);margin:16px 0}
+.export-note{font-size:12px;color:var(--text-muted);margin:8px 0 0}
+
+/* ---------- Dashboard ---------- */
+.dash-top{display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px;align-items:stretch;margin-bottom:16px}
+.gauge-box{background:var(--surface-1);border:1px solid var(--line);border-radius:8px;padding:12px;display:flex;flex-direction:column;align-items:center}
+.gauge-box h3,.chart-box h3{margin:0 0 4px;font-size:12.5px;font-weight:600;color:var(--text-secondary);align-self:flex-start}
+#gauge{width:100%;max-width:200px}
+#gauge .trk{fill:none;stroke:var(--surface-3);stroke-width:14;stroke-linecap:round}
+#gauge .val{fill:none;stroke:var(--series-temp);stroke-width:14;stroke-linecap:round;transition:stroke-dashoffset .5s ease}
+#gauge .tick{stroke:var(--text-muted);stroke-width:1.5}
+#gauge .tl{fill:var(--text-muted);font:400 11px var(--font-mono)}
+#gauge .big{fill:var(--text-primary);font:700 30px var(--font-mono)}
+#gauge .unit{fill:var(--text-secondary);font:500 12px var(--font-mono)}
+.status{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;margin-top:4px;border:1px solid var(--line-strong);color:var(--text-primary)}
+.status svg{width:12px;height:12px}
+.status.ok svg{color:var(--good)}
+.status.warn svg{color:var(--warning)}
+.status.crit{border-color:var(--critical)}
+.status.crit svg{color:var(--critical)}
+.tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.tile{background:var(--surface-1);border:1px solid var(--line);border-radius:8px;padding:12px 14px;transition:border-color .2s}
+.tile:hover{border-color:var(--line-strong)}
+.tile .k{font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:6px}
+.tile .k i{width:10px;height:3px;border-radius:2px;display:inline-block}
+.tile .v{font:700 24px/1.2 var(--font-mono);margin-top:4px;font-variant-numeric:tabular-nums}
+.tile .v small{font-size:13px;font-weight:500;color:var(--text-secondary);margin-left:2px}
+.tile .d{font-size:11.5px;color:var(--text-muted);font-family:var(--font-mono)}
+.charts{display:grid;gap:12px}
+.chart-box{background:var(--surface-1);border:1px solid var(--line);border-radius:8px;padding:12px;position:relative}
+.chart-box .hdr{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.chart-box .hdr span{font-family:var(--font-mono);font-size:11.5px;color:var(--text-muted)}
+.chart-box canvas{display:block;width:100%;height:170px;cursor:crosshair}
+.tip{
+  position:absolute;pointer-events:none;z-index:5;opacity:0;transition:opacity .1s;
+  background:var(--surface-3);border:1px solid var(--line-strong);border-radius:6px;
+  padding:6px 9px;font:12px var(--font-mono);color:var(--text-primary);white-space:nowrap;
+  box-shadow:0 6px 18px rgba(0,0,0,.35);
+}
+.tip b{font-weight:700}
+.tip .t{color:var(--text-muted);display:block;font-size:11px}
+details.tbl{margin-top:12px}
+details.tbl summary{cursor:pointer;color:var(--text-secondary);font-size:12.5px}
+details.tbl table{width:100%;border-collapse:collapse;margin-top:8px;font:12px var(--font-mono)}
+details.tbl th,details.tbl td{text-align:right;padding:4px 8px;border-bottom:1px solid var(--line)}
+details.tbl th{color:var(--text-muted);font-weight:500}
+details.tbl th:first-child,details.tbl td:first-child{text-align:left}
+
+/* ---------- Consola ---------- */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:0 -16px 0;padding:0 16px}
+.tabs button{all:unset;cursor:pointer;padding:8px 12px;font:500 12.5px var(--font-mono);color:var(--text-muted);border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s}
+.tabs button:hover{color:var(--text-primary)}
+.tabs button[aria-selected=true]{color:var(--text-primary);border-bottom-color:var(--accent)}
+.tabs .count{margin-left:6px;color:var(--text-muted);font-size:11px}
+.log{
+  height:340px;overflow:auto;margin:0 -16px -16px;padding:10px 16px;
+  background:#0f0f0e;border-radius:0 0 var(--radius) var(--radius);
+  font:12px/1.6 var(--font-mono);color:var(--text-secondary);
+}
+.log[hidden]{display:none}
+.log div{white-space:pre-wrap;word-break:break-all;animation:in .25s ease}
+.log .ts{color:var(--text-muted)}
+.log .tg{color:var(--text-primary);font-weight:500}
+.log .pub{color:#f3b58e}
+.log .ack{color:#7fd6b4}
+.log .wr{color:#9cc4f5}
+.log .er{color:#ff9d9d}
+@keyframes in{from{transform:translateY(3px);background:rgba(250,178,25,.08)}to{transform:none;background:transparent}}
+
+footer{max-width:1360px;margin:0 auto;padding:0 24px 32px;color:var(--text-muted);font-size:12px}
+
+@media (max-width:1080px){
+  main{grid-template-columns:minmax(0,1fr);grid-template-areas:"topo" "ctrl" "dash" "cons"}
+}
+@media (max-width:640px){
+  main,header.top,footer{padding-left:16px;padding-right:16px}
+  .sim-banner{padding:8px 16px}
+  .dash-top{grid-template-columns:minmax(0,1fr)}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+
+<div class="sim-banner" role="note">
+  <span class="dot" aria-hidden="true"></span>
+  <strong>Simulación</strong>
+  <span>Datos generados localmente en tu navegador — no es telemetría real ni hay conexión a broker, base de datos ni servidores.</span>
+</div>
+
+<header class="top">
+  <div>
+    <h1>Pipeline IoT de temperatura <span>· modelo didáctico</span></h1>
+    <p class="sub">Recorrido conceptual de una lectura: sensor DHT22 sobre ESP32 → gateway Wi-Fi → broker MQTT (EMQX) → Telegraf → InfluxDB → panel tipo Grafana. Cada componente está representado por JavaScript en esta página.</p>
+  </div>
+  <span class="run-state" id="runState"><i></i><span id="runLabel">Generando lecturas</span></span>
+</header>
+
+<main>
+  <!-- Topología -->
+  <section class="panel" id="topo" aria-labelledby="topoH">
+    <div class="panel-h"><h2 id="topoH">Topología simulada</h2><span class="meta" id="topoMeta">topic: planta/oficina1/dht22</span></div>
+    <div class="topo-wrap">
+      <svg id="topoSvg" viewBox="0 24 960 190" role="img" aria-label="Diagrama: sensor DHT22 con ESP32, conectado por Wi-Fi al gateway, que envía MQTT a EMQX, Telegraf e InfluxDB dentro de un host Docker, y Grafana lee de InfluxDB">
+        <rect class="host" x="330" y="40" width="430" height="156" rx="12"/>
+        <text class="host-l" x="346" y="62">DOCKER HOST (representado)</text>
+
+        <path id="w0" class="wire wifi" d="M150 128 L200 128"/>
+        <path id="w1" class="wire" d="M290 128 L350 128"/>
+        <path id="w2" class="wire" d="M460 128 L500 128"/>
+        <path id="w3" class="wire" d="M610 128 L650 128"/>
+        <path id="w4" class="wire" d="M740 128 L820 128"/>
+        <text class="wl" x="175" y="118" text-anchor="middle">Wi-Fi</text>
+        <text class="wl" x="320" y="118" text-anchor="middle">MQTT</text>
+        <text class="wl" x="480" y="118" text-anchor="middle">sub</text>
+        <text class="wl" x="630" y="118" text-anchor="middle">line</text>
+        <text class="wl" x="780" y="118" text-anchor="middle">Flux</text>
+
+        <g class="node" id="nSensor"><rect x="20" y="96" width="130" height="64" rx="8"/><circle class="led" cx="138" cy="108" r="3.5"/><text x="34" y="122">DHT22 + ESP32</text><text class="s" x="34" y="142">sensor · QoS <tspan id="qosT">1</tspan></text></g>
+        <g class="node" id="nGw"><rect x="200" y="96" width="90" height="64" rx="8"/><text x="212" y="122">Gateway</text><text class="s" x="212" y="142">Wi-Fi AP</text></g>
+        <g class="node" id="nEmqx"><rect x="350" y="96" width="110" height="64" rx="8"/><text x="364" y="122">EMQX</text><text class="s" x="364" y="142">broker :1883</text></g>
+        <g class="node" id="nTel"><rect x="500" y="96" width="110" height="64" rx="8"/><text x="512" y="122">Telegraf</text><text class="s" x="512" y="142">mqtt_consumer</text></g>
+        <g class="node" id="nInf"><rect x="650" y="96" width="90" height="64" rx="8"/><text x="662" y="122">InfluxDB</text><text class="s" x="662" y="142">bucket iot</text></g>
+        <g class="node" id="nGraf"><rect x="820" y="96" width="120" height="64" rx="8"/><text x="834" y="122">Grafana</text><text class="s" x="834" y="142">dashboard ↓</text></g>
+        <g id="pkts"></g>
+      </svg>
+    </div>
+  </section>
+
+  <!-- Controles -->
+  <aside class="panel" id="ctrl" aria-labelledby="ctrlH">
+    <div class="panel-h"><h2 id="ctrlH">Panel de control</h2></div>
+    <div class="ctl">
+      <div class="lbl"><label for="sBase">Temperatura base</label> <output id="oBase" for="sBase">24.0 °C</output></div>
+      <input type="range" id="sBase" min="10" max="40" step="0.5" value="24">
+    </div>
+    <div class="ctl">
+      <div class="lbl"><label for="sNoise">Ruido del sensor</label> <output id="oNoise" for="sNoise">± 0.6 °C</output></div>
+      <input type="range" id="sNoise" min="0" max="4" step="0.1" value="0.6">
+    </div>
+    <div class="ctl">
+      <div class="lbl"><label for="sInt">Intervalo de muestreo</label> <output id="oInt" for="sInt">2.0 s</output></div>
+      <input type="range" id="sInt" min="0.5" max="10" step="0.5" value="2">
+    </div>
+    <div class="ctl">
+      <label id="qosL">QoS MQTT</label>
+      <div class="seg" role="group" aria-labelledby="qosL">
+        <button type="button" data-qos="0" aria-pressed="false">0</button>
+        <button type="button" data-qos="1" aria-pressed="true">1</button>
+        <button type="button" data-qos="2" aria-pressed="false">2</button>
+      </div>
+      <p class="qos-help" id="qosHelp">QoS 1 — al menos una vez: el broker confirma con PUBACK.</p>
+    </div>
+    <div class="btns">
+      <button class="btn primary" id="bPause" type="button">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1"/><rect x="9.5" y="2" width="3.5" height="12" rx="1"/></svg>
+        <span>Pausar</span></button>
+      <button class="btn danger" id="bSpike" type="button">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M1 11h3l2-8 3 11 2-6h4"/></svg>
+        Pico térmico</button>
+    </div>
+    <div class="divider"></div>
+    <div class="panel-h"><h2>Exportar buffer</h2><span class="meta" id="bufMeta">0 lecturas</span></div>
+    <div class="btns">
+      <button class="btn" id="bCsv" type="button">Descargar CSV</button>
+      <button class="btn" id="bJson" type="button">Descargar JSON</button>
+    </div>
+    <p class="export-note">Los archivos contienen datos sintéticos generados en esta sesión (máx. 600 lecturas).</p>
+  </aside>
+
+  <!-- Dashboard -->
+  <section class="panel" id="dash" aria-labelledby="dashH">
+    <div class="panel-h"><h2 id="dashH">Dashboard (estilo Grafana, generado en el DOM)</h2><span class="meta" id="dashMeta">ventana: últimas 60 lecturas</span></div>
+    <div class="dash-top">
+      <div class="gauge-box">
+        <h3>Temperatura actual</h3>
+        <svg id="gauge" viewBox="0 -20 200 170" role="img" aria-labelledby="gaugeDesc">
+          <desc id="gaugeDesc">Indicador de temperatura actual en escala de 0 a 50 grados</desc>
+          <path class="trk" d="M30 120 A80 80 0 1 1 170 120"/>
+          <path class="val" id="gVal" d="M30 120 A80 80 0 1 1 170 120"/>
+          <g id="gTicks"></g>
+          <text class="big" id="gNum" x="100" y="104" text-anchor="middle">--</text>
+          <text class="unit" x="100" y="124" text-anchor="middle">°C</text>
+        </svg>
+        <span class="status ok" id="status" role="status">
+          <svg viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><circle cx="6" cy="6" r="5"/></svg>
+          <span>Normal</span></span>
+      </div>
+      <div class="tiles">
+        <div class="tile"><div class="k"><i style="background:var(--series-temp)"></i>Máxima</div><div class="v" id="tMax">--<small>°C</small></div><div class="d">ventana actual</div></div>
+        <div class="tile"><div class="k"><i style="background:var(--series-temp)"></i>Mínima</div><div class="v" id="tMin">--<small>°C</small></div><div class="d">ventana actual</div></div>
+        <div class="tile"><div class="k"><i style="background:var(--series-temp)"></i>Media</div><div class="v" id="tAvg">--<small>°C</small></div><div class="d" id="tAvgD">n = 0</div></div>
+        <div class="tile"><div class="k"><i style="background:var(--series-hum)"></i>Humedad</div><div class="v" id="tHum">--<small>%</small></div><div class="d">relativa, última</div></div>
+              </div>
+    </div>
+    <div class="charts">
+      <div class="chart-box" id="cbTemp">
+        <div class="hdr"><h3>Temperatura (°C)</h3><span>DHT22 · campo temperature</span></div>
+        <canvas id="cTemp" aria-label="Gráfico de línea de temperatura en el tiempo" role="img"></canvas>
+        <div class="tip" id="tipTemp"></div>
+      </div>
+      <div class="chart-box" id="cbHum">
+        <div class="hdr"><h3>Humedad relativa (%)</h3><span>DHT22 · campo humidity</span></div>
+        <canvas id="cHum" aria-label="Gráfico de línea de humedad relativa en el tiempo" role="img"></canvas>
+        <div class="tip" id="tipHum"></div>
+      </div>
+    </div>
+    <details class="tbl">
+      <summary>Ver últimas 10 lecturas en tabla</summary>
+      <table><thead><tr><th scope="col">Hora</th><th scope="col">Temp. °C</th><th scope="col">Hum. %</th><th scope="col">QoS</th></tr></thead><tbody id="tblBody"></tbody></table>
+    </details>
+  </section>
+
+  <!-- Consola -->
+  <section class="panel" id="cons" aria-labelledby="consH">
+    <div class="panel-h"><h2 id="consH">Consola simulada</h2><span class="meta">logs de ejemplo</span></div>
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" id="tabE" aria-selected="true" aria-controls="logE">EMQX<span class="count" id="cE">0</span></button>
+      <button type="button" role="tab" id="tabI" aria-selected="false" aria-controls="logI" tabindex="-1">InfluxDB<span class="count" id="cI">0</span></button>
+    </div>
+    <div class="log" id="logE" role="tabpanel" aria-labelledby="tabE" aria-live="off"></div>
+    <div class="log" id="logI" role="tabpanel" aria-labelledby="tabI" hidden></div>
+  </section>
+</main>
+
+<footer>Trabajo académico · todo lo visible (topología, logs, gráficos) se calcula en el cliente con un modelo pseudoaleatorio. Ningún dato proviene de hardware, Docker, EMQX, InfluxDB ni Grafana.</footer>
+
+<script>
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const BUF_MAX = 600, WIN = 60, LOG_MAX = 250;
+  const st = { base:24, noise:0.6, interval:2, qos:1, running:true, spike:0, msgId:0, buf:[], drift:0, hum:55, timer:null };
+  const CLIENT = "esp32-dht22-01", TOPIC = "planta/oficina1/dht22";
+
+  /* ---------- sliders ---------- */
+  function paintRange(el){ const p = (el.value - el.min) / (el.max - el.min) * 100; el.style.setProperty("--p", p + "%"); }
+  function bind(id, out, fmt, key){
+    const el = $(id);
+    const upd = () => { st[key] = +el.value; $(out).textContent = fmt(+el.value); paintRange(el); };
+    el.addEventListener("input", () => { upd(); if (key === "interval") schedule(); });
+    upd();
+  }
+  bind("sBase","oBase", v => v.toFixed(1)+" °C","base");
+  bind("sNoise","oNoise", v => "± "+v.toFixed(1)+" °C","noise");
+  bind("sInt","oInt", v => v.toFixed(1)+" s","interval");
+
+  const QOS_HELP = {
+    0:"QoS 0 — como máximo una vez: sin confirmación del broker.",
+    1:"QoS 1 — al menos una vez: el broker confirma con PUBACK.",
+    2:"QoS 2 — exactamente una vez: PUBREC → PUBREL → PUBCOMP."
+  };
+  document.querySelectorAll(".seg button").forEach(b => b.addEventListener("click", () => {
+    document.querySelectorAll(".seg button").forEach(x => x.setAttribute("aria-pressed", x === b));
+    st.qos = +b.dataset.qos; $("qosHelp").textContent = QOS_HELP[st.qos]; $("qosT").textContent = st.qos;
+    logE(`<span class="tg">[config]</span> ${CLIENT} re-suscribe ${TOPIC} con QoS ${st.qos}`);
+  }));
+
+  $("bPause").addEventListener("click", () => {
+    st.running = !st.running;
+    $("bPause").querySelector("span").textContent = st.running ? "Pausar" : "Reanudar";
+    $("bPause").querySelector("svg").innerHTML = st.running
+      ? '<rect x="3" y="2" width="3.5" height="12" rx="1"/><rect x="9.5" y="2" width="3.5" height="12" rx="1"/>'
+      : '<path d="M4 2.5v11l9-5.5z"/>';
+    $("runState").classList.toggle("paused", !st.running);
+    $("runLabel").textContent = st.running ? "Generando lecturas" : "En pausa";
+    $("topoSvg").classList.toggle("paused", !st.running);
+    logE(st.running ? `<span class="tg">[client]</span> ${CLIENT} reanuda publicación` : `<span class="tg">[client]</span> ${CLIENT} pausa publicación (simulada)`);
+    schedule();
+  });
+  $("bSpike").addEventListener("click", () => {
+    st.spike = 14 + Math.random()*4;
+    logE(`<span class="er">[alerta] fallo simulado: pico térmico inyectado (+${st.spike.toFixed(1)} °C)</span>`);
+  });
+
+  /* ---------- consola ---------- */
+  const counts = { E:0, I:0 };
+  const pad = n => String(n).padStart(2,"0");
+  const ts = d => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3,"0")}`;
+  function push(which, html){
+    const box = $("log"+which);
+    const stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 24;
+    const div = document.createElement("div");
+    div.innerHTML = `<span class="ts">${ts(new Date())}</span> ${html}`;
+    box.appendChild(div);
+    while (box.childElementCount > LOG_MAX) box.firstElementChild.remove();
+    if (stick) box.scrollTop = box.scrollHeight;
+    $("c"+which).textContent = ++counts[which];
+  }
+  const logE = h => push("E", h), logI = h => push("I", h);
+  const tabs = [$("tabE"), $("tabI")];
+  function selectTab(t){
+    tabs.forEach(x => {
+      const on = x === t; x.setAttribute("aria-selected", on); x.tabIndex = on ? 0 : -1;
+      const p = $(x.getAttribute("aria-controls")); p.hidden = !on;
+      if (on) p.scrollTop = p.scrollHeight;
+    });
+  }
+  tabs.forEach((t,i) => {
+    t.addEventListener("click", () => selectTab(t));
+    t.addEventListener("keydown", e => {
+      if (e.key === "ArrowRight" || e.key === "ArrowLeft") { const n = tabs[(i+1)%2]; selectTab(n); n.focus(); }
+    });
+  });
+
+  /* ---------- topología: paquetes animados ---------- */
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const segs = ["w0","w1","w2","w3","w4"].map(id => $(id));
+  const nodes = ["nSensor","nGw","nEmqx","nTel","nInf","nGraf"].map(id => $(id));
+  function flash(i){ const n = nodes[i]; n.classList.add("hot"); setTimeout(() => n.classList.remove("hot"), 380); }
+  function travel(path, cls, dur, reverse){
+    return new Promise(res => {
+      if (reverse === undefined) reverse = false;
+      if (reduced) { res(); return; }
+      const c = document.createElementNS(SVGNS, "circle");
+      c.setAttribute("r", 5); c.setAttribute("class", cls);
+      $("pkts").appendChild(c);
+      const L = path.getTotalLength(), t0 = performance.now();
+      (function step(now){
+        const k = Math.min(1, (now - t0) / dur);
+        const p = path.getPointAtLength(L * (reverse ? 1 - k : k));
+        c.setAttribute("cx", p.x); c.setAttribute("cy", p.y);
+        if (k < 1) requestAnimationFrame(step); else { c.remove(); res(); }
+      })(t0);
+    });
+  }
+  async function animatePacket(r){
+    const cls = r.spike ? "pkt spike" : "pkt";
+    const d = Math.max(140, Math.min(420, st.interval * 120));
+    flash(0);
+    await travel(segs[0], cls, d); flash(1);
+    await travel(segs[1], cls, d); flash(2);
+    if (r.qos >= 1) travel(segs[1], "ack", d, true).then(() => travel(segs[0], "ack", d, true));
+    await travel(segs[2], cls, d); flash(3);
+    await travel(segs[3], cls, d); flash(4);
+    await travel(segs[4], cls, d); flash(5);
+  }
+
+  /* ---------- modelo de datos sintético ---------- */
+  function gauss(){ let u=0,v=0; while(!u) u=Math.random(); while(!v) v=Math.random(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
+  function sample(){
+    st.drift = st.drift*0.92 + gauss()*0.15;
+    const spikeNow = st.spike;
+    st.spike = st.spike > 0.3 ? st.spike*0.72 : 0;
+    const t = st.base + st.drift + gauss()*st.noise + spikeNow;
+    const targetH = 55 - (t - 24)*1.4;
+    st.hum += (targetH - st.hum)*0.35 + gauss()*Math.max(0.3, st.noise*0.8);
+    st.hum = Math.max(5, Math.min(99, st.hum));
+    return { ts:new Date(), temperature:+t.toFixed(2), humidity:+st.hum.toFixed(1), qos:st.qos, msgId:++st.msgId, spike:spikeNow > 2 };
+  }
+
+  function tick(){
+    const r = sample();
+    st.buf.push(r); if (st.buf.length > BUF_MAX) st.buf.shift();
+    const payload = JSON.stringify({ t:r.temperature, h:r.humidity });
+    const bytes = payload.length;
+    logE(`<span class="pub">PUBLISH</span> client=${CLIENT} topic=${TOPIC} qos=${r.qos} mid=${r.msgId} len=${bytes} ${payload}`);
+    if (r.qos === 1) setTimeout(() => logE(`<span class="ack">PUBACK</span> → ${CLIENT} mid=${r.msgId}`), 120);
+    if (r.qos === 2) {
+      setTimeout(() => logE(`<span class="ack">PUBREC</span> → ${CLIENT} mid=${r.msgId}`), 90);
+      setTimeout(() => logE(`<span class="ack">PUBREL</span> ← ${CLIENT} mid=${r.msgId}`), 170);
+      setTimeout(() => logE(`<span class="ack">PUBCOMP</span> → ${CLIENT} mid=${r.msgId}`), 250);
+    }
+    if (r.spike) logE(`<span class="er">[rule] temperature=${r.temperature} supera umbral 35 °C (evento simulado)</span>`);
+    const ns = BigInt(r.ts.getTime()) * 1000000n;
+    setTimeout(() => {
+      logI(`<span class="wr">POST /api/v2/write</span> bucket=iot precision=ns 204 No Content`);
+      logI(`dht22,device=${CLIENT},site=oficina1 temperature=${r.temperature},humidity=${r.humidity} ${ns}`);
+    }, reduced ? 0 : Math.min(1400, st.interval*500));
+    animatePacket(r);
+    render();
+  }
+
+  function schedule(){
+    clearTimeout(st.timer);
+    if (!st.running) return;
+    st.timer = setTimeout(() => { tick(); schedule(); }, st.interval*1000);
+  }
+
+  /* ---------- gauge ---------- */
+  const G = { min:0, max:50, arc:null };
+  (function initGauge(){
+    const p = $("gVal"); G.arc = p.getTotalLength();
+    p.style.strokeDasharray = G.arc; p.style.strokeDashoffset = G.arc;
+    const g = $("gTicks"), cx = 100, cy = 120 - Math.sqrt(80*80 - 70*70);
+    for (let v = 0; v <= 50; v += 10){
+      const pt = p.getPointAtLength(G.arc * v/50);
+      const ux = (pt.x - cx)/80, uy = (pt.y - cy)/80;
+      g.insertAdjacentHTML("beforeend",
+        `<line class="tick" x1="${cx + ux*90}" y1="${cy + uy*90}" x2="${cx + ux*96}" y2="${cy + uy*96}"/>`);
+      if (v === 0 || v === 50) g.insertAdjacentHTML("beforeend",
+        `<text class="tl" x="${cx + ux*82}" y="${cy + uy*82 + 18}" text-anchor="middle">${v}</text>`);
+    }
+  })();
+  const ICONS = {
+    ok:'<circle cx="6" cy="6" r="5"/>',
+    warn:'<path d="M6 1 11.5 11h-11z"/>',
+    crit:'<rect x="1" y="1" width="10" height="10" rx="1" transform="rotate(45 6 6)"/>'
+  };
+  function setGauge(t){
+    const k = Math.max(0, Math.min(1, (t - G.min)/(G.max - G.min)));
+    $("gVal").style.strokeDashoffset = G.arc*(1-k);
+    $("gNum").textContent = t.toFixed(1);
+    const s = t >= 35 ? ["crit","Crítico ≥ 35 °C"] : t >= 30 ? ["warn","Alerta ≥ 30 °C"] : ["ok","Normal"];
+    const el = $("status"); el.className = "status " + s[0];
+    el.innerHTML = `<svg viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">${ICONS[s[0]]}</svg><span>${s[1]}</span>`;
+  }
+
+  /* ---------- gráficos (canvas propio, sin dependencias) ---------- */
+  function makeChart(canvasId, tipId, key, unit, colorVar){
+    const cv = $(canvasId), tip = $(tipId), ctx = cv.getContext("2d");
+    let hover = null, geo = null;
+    function draw(){
+      const dpr = window.devicePixelRatio || 1;
+      const W = cv.clientWidth, H = cv.clientHeight;
+      if (cv.width !== Math.round(W*dpr) || cv.height !== Math.round(H*dpr)) { cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr); }
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+      ctx.clearRect(0,0,W,H);
+      const data = st.buf.slice(-WIN);
+      const m = { l:40, r:14, t:10, b:22 };
+      const pw = W - m.l - m.r, ph = H - m.t - m.b;
+      ctx.font = `11px ${css("--font-mono")}`;
+      if (!data.length){
+        ctx.fillStyle = css("--text-muted"); ctx.textAlign = "center";
+        ctx.fillText("Esperando la primera lectura simulada…", W/2, H/2); geo = null; return;
+      }
+      const vals = data.map(d => d[key]);
+      let lo = Math.min(...vals), hi = Math.max(...vals);
+      const span = Math.max(hi - lo, key === "temperature" ? 4 : 8);
+      const mid = (hi + lo)/2; lo = mid - span*0.6; hi = mid + span*0.6;
+      const step = niceStep((hi - lo)/4);
+      lo = Math.floor(lo/step)*step; hi = Math.ceil(hi/step)*step;
+      const x = i => m.l + (data.length === 1 ? pw : i*(pw/(data.length-1)));
+      const y = v => m.t + ph - (v - lo)/(hi - lo)*ph;
+      // grid recesivo
+      ctx.strokeStyle = css("--line"); ctx.lineWidth = 1; ctx.fillStyle = css("--text-muted");
+      ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      for (let v = lo; v <= hi + 1e-9; v += step){
+        const yy = Math.round(y(v)) + .5;
+        ctx.beginPath(); ctx.moveTo(m.l, yy); ctx.lineTo(W - m.r, yy); ctx.stroke();
+        ctx.fillText(+v.toFixed(1), m.l - 6, yy);
+      }
+      // umbral 35 °C
+      if (key === "temperature" && 35 > lo && 35 < hi){
+        ctx.save(); ctx.setLineDash([4,4]); ctx.strokeStyle = css("--critical");
+        const yy = Math.round(y(35)) + .5; ctx.beginPath(); ctx.moveTo(m.l, yy); ctx.lineTo(W - m.r, yy); ctx.stroke();
+        ctx.restore(); ctx.fillStyle = css("--text-secondary"); ctx.textAlign = "left"; ctx.fillText("umbral 35", m.l + 4, yy - 8);
+      }
+      // eje x: hora primera/última
+      ctx.fillStyle = css("--text-muted"); ctx.textBaseline = "top";
+      const hm = d => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      ctx.textAlign = "left"; ctx.fillText(hm(data[0].ts), x(0), H - m.b + 6);
+      ctx.textAlign = "right"; ctx.fillText(hm(data[data.length-1].ts), x(data.length-1), H - m.b + 6);
+      // línea 2px
+      const col = css(colorVar);
+      ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round";
+      ctx.beginPath(); data.forEach((d,i) => i ? ctx.lineTo(x(i), y(d[key])) : ctx.moveTo(x(i), y(d[key]))); ctx.stroke();
+      // área suave
+      const grad = ctx.createLinearGradient(0, m.t, 0, m.t + ph);
+      grad.addColorStop(0, col + "33"); grad.addColorStop(1, col + "00");
+      ctx.lineTo(x(data.length-1), m.t + ph); ctx.lineTo(x(0), m.t + ph); ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
+      // picos marcados
+      if (key === "temperature") data.forEach((d,i) => { if (d.spike) dot(x(i), y(d[key]), css("--critical")); });
+      // último punto
+      const li = data.length - 1; dot(x(li), y(data[li][key]), col);
+      // crosshair
+      if (hover !== null && hover < data.length){
+        const hx = x(hover), hy = y(data[hover][key]);
+        ctx.strokeStyle = css("--text-muted"); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(Math.round(hx)+.5, m.t); ctx.lineTo(Math.round(hx)+.5, m.t + ph); ctx.stroke();
+        dot(hx, hy, col);
+      }
+      geo = { x, data, m, pw };
+    }
+    function dot(px, py, c){
+      ctx.beginPath(); ctx.arc(px, py, 5, 0, Math.PI*2); ctx.fillStyle = css("--surface-1"); ctx.fill();
+      ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI*2); ctx.fillStyle = c; ctx.fill();
+    }
+    function move(e){
+      if (!geo) return;
+      const r = cv.getBoundingClientRect(), mx = e.clientX - r.left;
+      let best = 0, bd = Infinity;
+      geo.data.forEach((_,i) => { const d = Math.abs(geo.x(i) - mx); if (d < bd){ bd = d; best = i; } });
+      hover = best; draw();
+      const d = geo.data[best];
+      tip.innerHTML = `<span class="t">${ts(d.ts)} · mid ${d.msgId}</span><b>${d[key].toFixed(key === "temperature" ? 2 : 1)}</b> ${unit}${d.spike ? " · pico" : ""}`;
+      const box = cv.parentElement.getBoundingClientRect();
+      let left = e.clientX - box.left + 12; const tw = tip.offsetWidth;
+      if (left + tw > box.width - 8) left = e.clientX - box.left - tw - 12;
+      tip.style.left = left + "px"; tip.style.top = (cv.offsetTop + 8) + "px"; tip.style.opacity = 1;
+    }
+    cv.addEventListener("pointermove", move);
+    cv.addEventListener("pointerleave", () => { hover = null; tip.style.opacity = 0; draw(); });
+    return { draw };
+  }
+  function niceStep(raw){
+    const p = Math.pow(10, Math.floor(Math.log10(raw))), n = raw/p;
+    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p;
+  }
+  const chT = makeChart("cTemp","tipTemp","temperature","°C","--series-temp");
+  const chH = makeChart("cHum","tipHum","humidity","%","--series-hum");
+  new ResizeObserver(() => { chT.draw(); chH.draw(); }).observe($("dash"));
+
+  /* ---------- render ---------- */
+  function render(){
+    const win = st.buf.slice(-WIN), last = st.buf[st.buf.length-1];
+    if (last){
+      const ts_ = win.map(d => d.temperature);
+      const fmt = v => v.toFixed(1) + "<small>°C</small>";
+      $("tMax").innerHTML = fmt(Math.max(...ts_));
+      $("tMin").innerHTML = fmt(Math.min(...ts_));
+      $("tAvg").innerHTML = fmt(ts_.reduce((a,b) => a+b, 0)/ts_.length);
+      $("tAvgD").textContent = "n = " + ts_.length;
+      $("tHum").innerHTML = last.humidity.toFixed(1) + "<small>%</small>";
+      $("dashMeta").textContent = `ventana: últimas ${WIN} · ${st.msgId} PUBLISH`;
+      setGauge(last.temperature);
+      $("tblBody").innerHTML = st.buf.slice(-10).reverse().map(d =>
+        `<tr><td>${ts(d.ts)}</td><td>${d.temperature.toFixed(2)}</td><td>${d.humidity.toFixed(1)}</td><td>${d.qos}</td></tr>`).join("");
+    }
+    $("bufMeta").textContent = st.buf.length + " lecturas";
+    chT.draw(); chH.draw();
+  }
+
+  /* ---------- exportación ---------- */
+  function download(name, mime, text){
+    const url = URL.createObjectURL(new Blob([text], { type:mime }));
+    const a = Object.assign(document.createElement("a"), { href:url, download:name });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  const stamp = () => new Date().toISOString().replace(/[:.]/g,"-").slice(0,19);
+  $("bCsv").addEventListener("click", () => {
+    const rows = ["timestamp_iso,temperature_c,humidity_pct,qos,msg_id,spike,origen"]
+      .concat(st.buf.map(d => [d.ts.toISOString(), d.temperature, d.humidity, d.qos, d.msgId, d.spike, "simulado"].join(",")));
+    download(`lecturas-simuladas-${stamp()}.csv`, "text/csv;charset=utf-8", rows.join("\n"));
+  });
+  $("bJson").addEventListener("click", () => {
+    download(`lecturas-simuladas-${stamp()}.json`, "application/json", JSON.stringify({
+      aviso:"Datos sintéticos generados localmente en el navegador; no es telemetría real.",
+      generado:new Date().toISOString(), cliente:CLIENT, topic:TOPIC,
+      lecturas:st.buf.map(d => ({ timestamp:d.ts.toISOString(), temperature:d.temperature, humidity:d.humidity, qos:d.qos, msgId:d.msgId, spike:d.spike }))
+    }, null, 2));
+  });
+
+  /* ---------- arranque ---------- */
+  logE(`<span class="tg">[sim]</span> broker EMQX representado · listener tcp :1883`);
+  logE(`<span class="tg">CONNECT</span> client=${CLIENT} clean_session=true keepalive=60`);
+  logE(`<span class="ack">CONNACK</span> → ${CLIENT} rc=0 (Connection Accepted)`);
+  logE(`<span class="tg">SUBSCRIBE</span> client=telegraf-01 topic=planta/+/dht22 qos=1`);
+  logI(`<span class="tg">[sim]</span> InfluxDB representado · org=academico bucket=iot retention=7d`);
+  // historial inicial para que los gráficos no arranquen vacíos
+  const now = Date.now();
+  for (let i = 30; i > 0; i--){ const r = sample(); r.ts = new Date(now - i*st.interval*1000); st.buf.push(r); }
+  render();
+  schedule();
+})();
+</script>
+</body>
+</html>
