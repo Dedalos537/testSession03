@@ -1,9 +1,10 @@
 # TA 03 · Sistema de control de temperatura IoT
 
-Rama `TA03`. Tiene dos entregables:
+Rama `TA03-1` (parte de `TA03`). Tiene tres entregables:
 
 1. **Laboratorio Packet Tracer** (`packet-tracer/Temperature_Control_System.pkt`): dos oficinas con sensores IoT conectadas por un ISP a un servidor IoT y a un servidor DNS.
 2. **Simulador web** (`index.html`): página autocontenida que representa el pipeline MQTT → EMQX → Telegraf → InfluxDB → Grafana con datos generados en el navegador. Es una simulación: no hay broker, base de datos ni hardware reales.
+3. **Actividad 10** (`Semana10_Laboratorio_EMQX_Roles_IoT/`): laboratorio con EMQX real en Docker, un sensor virtual en Python que publica por MQTT y un monitor que guarda el histórico en CSV. Ver la sección [Actividad 10](#actividad-10-semana10_laboratorio_emqx_roles_iot).
 
 ## Estructura
 
@@ -79,15 +80,35 @@ npx playwright install chromium
 npm test                         # 7 escenarios × (desktop, mobile)
 ```
 
+## Actividad 10: Semana10_Laboratorio_EMQX_Roles_IoT
+
+La guía completa está en [`Semana10_Laboratorio_EMQX_Roles_IoT/README.md`](Semana10_Laboratorio_EMQX_Roles_IoT/README.md). Para iniciarlo:
+
+```
+cd Semana10_Laboratorio_EMQX_Roles_IoT
+docker compose up -d --build
+```
+
+- Dashboard EMQX: http://localhost:18083 (admin / public; pide cambiarla en el primer ingreso).
+- Topics: `iot/utp/semana10/equipo01/telemetria` y `.../estado` (QoS 1, Last Will `offline`).
+- Histórico: `data/telemetria.csv`.
+
+Cambios respecto al ZIP original:
+
+- `apps/Dockerfile`: se agregó `PYTHONUNBUFFERED=1`. Sin esto, `docker compose logs sensor` y `docker compose logs monitor` (pasos 12 y 13) no mostraban nada, porque Python retenía la salida en buffer.
+- `docker-compose.yml`: los puertos del host se pueden cambiar con `MQTT_HOST_PORT` y `DASHBOARD_HOST_PORT` (por defecto 1883 y 18083), por si Mosquitto de la Semana 08 sigue ocupando 1883. Está documentado en `.env.example` y en `docs/SOLUCION_PROBLEMAS.md`.
+- `scripts/ci_prueba_laboratorio.sh`: prueba de integración que recorre las partes B, C, D, F y G del README. Usa su propio proyecto Compose (`semana10-ci`), así que no borra los datos del laboratorio del estudiante.
+
 ## Pipeline (`.github/workflows/ci.yml`)
 
-Se ejecuta en cada push y pull request a `TA03`:
+Se ejecuta en cada push y pull request a `TA03` y `TA03-1`:
 
 | Job | Qué hace |
 |---|---|
 | `lint` | Valida el HTML con html-validate y compila los scripts inline |
 | `packet-tracer` | Descifra el `.pkt` y verifica router, DHCP, DNS, servidor IoT, clientes IoT y gateways; publica el resultado en el resumen del job |
 | `e2e` | Playwright en Chromium (escritorio y Pixel 7): rótulo de simulación, sin errores ni scroll horizontal, generación de datos, handshake QoS 2, pausa, pico térmico y exportación CSV/JSON. Sube el reporte HTML como artefacto |
+| `lab-semana10` | Compila `sensor_simulator.py` y `monitor.py`, valida el compose y ejecuta la prueba de integración con EMQX real: tres contenedores arriba, dashboard en 18083, PUBLISH y SUBSCRIBE, dos clientes en EMQX, CSV con columnas y rangos correctos, Last Will `offline` al detener el sensor y recuperación al reiniciarlo. Sube el log y el CSV como artefacto `semana10-evidencias` |
 | `deploy` | Solo en push a `TA03` y con los tres jobs anteriores en verde: publica `index.html` y el `.pkt` en GitHub Pages |
 
 ## Créditos

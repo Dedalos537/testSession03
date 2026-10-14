@@ -1,0 +1,56 @@
+services:
+  emqx:
+    image: emqx/emqx:6.3.1
+    container_name: semana10-emqx
+    hostname: node1.emqx.com
+    environment:
+      EMQX_NODE_NAME: emqx@node1.emqx.com
+    ports:
+      - "${MQTT_HOST_PORT:-1883}:1883"
+      - "${DASHBOARD_HOST_PORT:-18083}:18083"
+    volumes:
+      - emqx_data:/opt/emqx/data
+      - emqx_log:/opt/emqx/log
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+    restart: unless-stopped
+
+  sensor:
+    build:
+      context: ./apps
+    container_name: semana10-sensor
+    command: ["python", "sensor_simulator.py"]
+    environment:
+      MQTT_HOST: emqx
+      MQTT_PORT: "1883"
+      TEAM_ID: ${TEAM_ID:-equipo01}
+      DEVICE_ID: ${DEVICE_ID:-esp32-virtual-01}
+      INTERVAL_SECONDS: ${INTERVAL_SECONDS:-5}
+    depends_on:
+      emqx:
+        condition: service_healthy
+    restart: unless-stopped
+
+  monitor:
+    build:
+      context: ./apps
+    container_name: semana10-monitor
+    command: ["python", "monitor.py"]
+    environment:
+      MQTT_HOST: emqx
+      MQTT_PORT: "1883"
+      TOPIC_FILTER: iot/utp/semana10/+/+
+      CSV_PATH: /app/data/telemetria.csv
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      emqx:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  emqx_data:
+  emqx_log:
